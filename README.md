@@ -3,7 +3,7 @@
 **ESLint for AI slop.** Catch AI-generated code smells before they hit production.
 
 ```bash
-npx vibe-check .
+npx @yuvrajangadsingh/vibecheck .
 ```
 
 ```
@@ -29,16 +29,16 @@ vibecheck catches these patterns with zero config, zero API keys, zero cost. Run
 
 ```bash
 # Run directly (no install)
-npx vibe-check .
+npx @yuvrajangadsingh/vibecheck .
 
 # Install globally
-npm install -g vibe-check
+npm install -g @yuvrajangadsingh/vibecheck
 
 # Scan a specific directory
-npx vibe-check src/
+npx @yuvrajangadsingh/vibecheck src/
 
 # Scan a single file
-npx vibe-check src/api.ts
+npx @yuvrajangadsingh/vibecheck src/api.ts
 ```
 
 ## What it catches
@@ -118,11 +118,11 @@ All rules are on by default at their recommended severity. Set any rule to `"off
 ```yaml
 # GitHub Actions
 - name: Vibecheck
-  run: npx vibe-check . --json > vibecheck.json
+  run: npx @yuvrajangadsingh/vibecheck . --json > vibecheck.json
 
 # Exit code 1 if errors found, 0 otherwise
 - name: Vibecheck (fail on errors)
-  run: npx vibe-check .
+  run: npx @yuvrajangadsingh/vibecheck .
 ```
 
 ## How it works

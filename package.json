@@ -1,5 +1,5 @@
 {
-  "name": "vibe-check",
+  "name": "@yuvrajangadsingh/vibecheck",
   "version": "1.0.0",
   "description": "ESLint for AI slop. Detect AI-generated code smells in your JS/TS codebase.",
   "type": "module",
