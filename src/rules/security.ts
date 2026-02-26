@@ -1,0 +1,47 @@
+import type { Rule } from '../types.js';
+
+export const securityRules: Rule[] = [
+  {
+    id: 'no-hardcoded-secrets',
+    name: 'No Hardcoded Secrets',
+    description: 'Detects API keys, passwords, and tokens hardcoded in source code.',
+    category: 'security',
+    severity: 'error',
+    languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'],
+    pattern: /(api[_-]?key|secret|password|passwd|token|auth[_-]?token|access[_-]?key|private[_-]?key)\s*[:=]\s*['"][A-Za-z0-9+/=_\-.]{16,}['"]/i,
+    antiPattern: /(process\.env|import\.meta\.env|ENV\[|config\.|getenv|os\.environ|example|placeholder|xxx|your[_-]|<[A-Z_]+>|test|mock|fake|dummy|sample)/i,
+    messageTemplate: 'Hardcoded secret detected. Use environment variables instead.',
+  },
+  {
+    id: 'no-eval',
+    name: 'No eval()',
+    description: 'eval() and new Function() execute arbitrary code, enabling injection attacks.',
+    category: 'security',
+    severity: 'error',
+    languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'],
+    pattern: /\beval\s*\(|new\s+Function\s*\(/,
+    antiPattern: /eslint-disable|\/\/\s*safe|globalThis\.eval/,
+    messageTemplate: 'eval() or new Function() allows arbitrary code execution.',
+  },
+  {
+    id: 'no-innerhtml',
+    name: 'No innerHTML',
+    description: 'innerHTML and dangerouslySetInnerHTML can introduce XSS vulnerabilities.',
+    category: 'security',
+    severity: 'warn',
+    languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'],
+    pattern: /\.innerHTML\s*=|dangerouslySetInnerHTML/,
+    antiPattern: /DOMPurify|sanitize|xss|eslint-disable/i,
+    messageTemplate: 'innerHTML/dangerouslySetInnerHTML is an XSS vector. Use textContent or a sanitizer.',
+  },
+  {
+    id: 'no-sql-concat',
+    name: 'No SQL String Concatenation',
+    description: 'Building SQL queries with string concatenation enables SQL injection.',
+    category: 'security',
+    severity: 'error',
+    languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'],
+    pattern: /['"`]\s*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)\b[^'"`]*(?:\$\{|\+\s*\w)/i,
+    messageTemplate: 'SQL query built with string concatenation. Use parameterized queries.',
+  },
+];

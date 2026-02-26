@@ -1,0 +1,50 @@
+{
+  "name": "vibe-check",
+  "version": "1.0.0",
+  "description": "ESLint for AI slop. Detect AI-generated code smells in your JS/TS codebase.",
+  "type": "module",
+  "bin": {
+    "vibecheck": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "node dist/cli.js .",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "linter",
+    "ai",
+    "slop",
+    "vibe-coding",
+    "code-quality",
+    "security",
+    "cli"
+  ],
+  "author": "Yuvraj Angad Singh",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yuvrajangadsingh/vibecheck.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "commander": "^13.0.0",
+    "fast-glob": "^3.3.3",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.2",
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
