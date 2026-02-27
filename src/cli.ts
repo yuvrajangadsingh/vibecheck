@@ -8,7 +8,7 @@ import type { Severity } from './types.js';
 
 const VALID_SEVERITIES: Severity[] = ['error', 'warn', 'info'];
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 
 const program = new Command()
   .name('vibecheck')
