@@ -1,21 +1,26 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { relative, extname } from 'node:path';
 import fg from 'fast-glob';
 import { allRules, allMultilineRules } from './rules/index.js';
 import type { Config, Finding, ScanResult, Severity } from './types.js';
 
+const MAX_FILE_SIZE = 1_000_000; // 1MB
+const VALID_SEVERITIES: Severity[] = ['error', 'warn', 'info'];
+
 function getLanguage(filePath: string): string {
-  const ext = extname(filePath).slice(1);
-  return ext;
+  return extname(filePath).slice(1);
+}
+
+function resolveSeverity(configValue: string | undefined, fallback: Severity): Severity {
+  if (configValue && VALID_SEVERITIES.includes(configValue as Severity)) {
+    return configValue as Severity;
+  }
+  return fallback;
 }
 
 export async function scan(targetPath: string, config: Config): Promise<ScanResult> {
   const start = performance.now();
   const findings: Finding[] = [];
-
-  const ignorePatterns = config.ignore.map((p) =>
-    p.startsWith('!') ? p : `!${p.includes('/') ? p : `**/${p}`}`
-  );
 
   const files = await fg(config.include, {
     cwd: targetPath,
@@ -26,17 +31,20 @@ export async function scan(targetPath: string, config: Config): Promise<ScanResu
     followSymbolicLinks: false,
   });
 
-  const activeRules = allRules.filter((rule) => {
-    const configSeverity = config.rules[rule.id];
-    return configSeverity !== 'off';
-  });
+  const activeRules = allRules.filter((rule) => config.rules[rule.id] !== 'off');
+  const activeMultilineRules = allMultilineRules.filter((rule) => config.rules[rule.id] !== 'off');
 
-  const activeMultilineRules = allMultilineRules.filter((rule) => {
-    const configSeverity = config.rules[rule.id];
-    return configSeverity !== 'off';
-  });
+  let scannedCount = 0;
 
   for (const filePath of files) {
+    // Skip large files
+    try {
+      const stat = statSync(filePath);
+      if (stat.size > MAX_FILE_SIZE) continue;
+    } catch {
+      continue;
+    }
+
     let content: string;
     try {
       content = readFileSync(filePath, 'utf-8');
@@ -44,14 +52,22 @@ export async function scan(targetPath: string, config: Config): Promise<ScanResu
       continue;
     }
 
+    // Skip binary files
+    if (content.includes('\0')) continue;
+
+    scannedCount++;
+
     const lang = getLanguage(filePath);
     const lines = content.split('\n');
     const relPath = relative(targetPath, filePath);
 
+    // Filter rules by language once per file
+    const rulesForFile = activeRules.filter((r) => r.languages.includes(lang));
+    const multilineRulesForFile = activeMultilineRules.filter((r) => r.languages.includes(lang));
+
     // Line-by-line rules
-    for (const rule of activeRules) {
-      if (!rule.languages.includes(lang)) continue;
-      const severity: Severity = (config.rules[rule.id] as Severity) || rule.severity;
+    for (const rule of rulesForFile) {
+      const severity = resolveSeverity(config.rules[rule.id], rule.severity);
 
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
@@ -78,9 +94,8 @@ export async function scan(targetPath: string, config: Config): Promise<ScanResu
     }
 
     // Multiline rules
-    for (const rule of activeMultilineRules) {
-      if (!rule.languages.includes(lang)) continue;
-      const severity: Severity = (config.rules[rule.id] as Severity) || rule.severity;
+    for (const rule of multilineRulesForFile) {
+      const severity = resolveSeverity(config.rules[rule.id], rule.severity);
 
       const multiFindings = rule.detect(lines, filePath);
       for (const mf of multiFindings) {
@@ -98,7 +113,6 @@ export async function scan(targetPath: string, config: Config): Promise<ScanResu
     }
   }
 
-  // Sort findings by file, then line
   findings.sort((a, b) => {
     if (a.file !== b.file) return a.file.localeCompare(b.file);
     return a.line - b.line;
@@ -111,7 +125,7 @@ export async function scan(targetPath: string, config: Config): Promise<ScanResu
 
   return {
     findings,
-    filesScanned: files.length,
+    filesScanned: scannedCount,
     duration: performance.now() - start,
     summary,
   };

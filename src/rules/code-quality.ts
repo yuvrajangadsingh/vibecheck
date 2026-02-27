@@ -24,6 +24,23 @@ export const codeQualityRules: Rule[] = [
   },
 ];
 
+const CONTROL_FLOW_KEYWORDS = /^(if|else|for|while|do|switch|catch|finally|with|return|throw|new|delete|typeof|void|yield|await|class|try|import|export|from|as)$/;
+
+// Counts braces while skipping string/template literal contents
+function trackBraceDepth(line: string, depth: number): number {
+  let inStr: string | null = null;
+  let escaped = false;
+  for (const ch of line) {
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\') { escaped = true; continue; }
+    if (inStr) { if (ch === inStr) inStr = null; continue; }
+    if (ch === '"' || ch === "'" || ch === '`') { inStr = ch; continue; }
+    if (ch === '{') depth++;
+    if (ch === '}') depth--;
+  }
+  return depth;
+}
+
 export const codeQualityMultilineRules: MultilineRule[] = [
   {
     id: 'no-god-function',
@@ -43,6 +60,10 @@ export const codeQualityMultilineRules: MultilineRule[] = [
         if (!match) continue;
 
         const funcName = match[1] || match[2] || match[3] || 'anonymous';
+
+        // Skip control-flow keywords matched by the 3rd capture group
+        if (CONTROL_FLOW_KEYWORDS.test(funcName)) continue;
+
         const openBraceIdx = line.indexOf('{', match.index);
         if (openBraceIdx === -1) continue;
 
@@ -50,10 +71,7 @@ export const codeQualityMultilineRules: MultilineRule[] = [
         let funcEnd = i;
 
         for (let j = i; j < lines.length; j++) {
-          for (const ch of lines[j]) {
-            if (ch === '{') braceDepth++;
-            if (ch === '}') braceDepth--;
-          }
+          braceDepth = trackBraceDepth(lines[j], braceDepth);
           if (braceDepth === 0) {
             funcEnd = j;
             break;

@@ -48,9 +48,7 @@ export function formatPretty(result: ScanResult, minSeverity: Severity): string 
   for (const [file, findings] of byFile) {
     out.push(`  ${pc.bold(pc.underline(file))}`);
     for (const f of findings) {
-      const loc = pc.dim(`${f.line}:${f.column}`);
       const sev = severityColor[f.severity](severityLabel[f.severity]);
-      const rule = pc.dim(f.rule);
       out.push(`    ${padRight(`${f.line}:${f.column}`, 8)} ${sev}  ${padRight(f.rule, 28)} ${f.message}`);
     }
     out.push('');
@@ -83,19 +81,36 @@ export function formatPretty(result: ScanResult, minSeverity: Severity): string 
   return out.join('\n');
 }
 
-export function formatJSON(result: ScanResult): string {
-  return JSON.stringify(result, null, 2);
+export function formatJSON(result: ScanResult, minSeverity: Severity): string {
+  const severityOrder: Severity[] = ['error', 'warn', 'info'];
+  const minIdx = severityOrder.indexOf(minSeverity);
+  const filtered = result.findings.filter(
+    (f) => severityOrder.indexOf(f.severity) <= minIdx
+  );
+  const summary: Record<Severity, number> = { error: 0, warn: 0, info: 0 };
+  for (const f of filtered) summary[f.severity]++;
+  return JSON.stringify({ ...result, findings: filtered, summary }, null, 2);
 }
 
-export function formatQuiet(result: ScanResult): string {
-  if (result.summary.error === 0 && result.summary.warn === 0) {
+export function formatQuiet(result: ScanResult, minSeverity: Severity): string {
+  const severityOrder: Severity[] = ['error', 'warn', 'info'];
+  const minIdx = severityOrder.indexOf(minSeverity);
+  const filtered = result.findings.filter(
+    (f) => severityOrder.indexOf(f.severity) <= minIdx
+  );
+
+  if (filtered.length === 0) {
     return pc.green('No issues found.');
   }
+
+  const summary: Record<Severity, number> = { error: 0, warn: 0, info: 0 };
+  for (const f of filtered) summary[f.severity]++;
+
   const parts: string[] = [];
-  if (result.summary.error > 0) parts.push(`${result.summary.error} errors`);
-  if (result.summary.warn > 0) parts.push(`${result.summary.warn} warnings`);
-  if (result.summary.info > 0) parts.push(`${result.summary.info} info`);
-  return `${result.findings.length} problems: ${parts.join(', ')}`;
+  if (summary.error > 0) parts.push(`${summary.error} errors`);
+  if (summary.warn > 0) parts.push(`${summary.warn} warnings`);
+  if (summary.info > 0) parts.push(`${summary.info} info`);
+  return `${filtered.length} problems: ${parts.join(', ')}`;
 }
 
 function formatDuration(ms: number): string {

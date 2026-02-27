@@ -41,7 +41,7 @@ export const securityRules: Rule[] = [
     category: 'security',
     severity: 'error',
     languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'],
-    pattern: /['"`]\s*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)\b[^'"`]*(?:\$\{|\+\s*\w)/i,
+    pattern: /['"`]\s*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)\b(?:[^'"`]*\$\{|.*?['"`]\s*\+\s*\w)/i,
     messageTemplate: 'SQL query built with string concatenation. Use parameterized queries.',
   },
 ];

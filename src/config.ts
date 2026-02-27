@@ -40,17 +40,23 @@ export function loadConfig(configPath?: string): Config {
     if (existsSync(p)) {
       try {
         const raw = readFileSync(p, 'utf-8');
-        const parsed = JSON.parse(raw) as Partial<Config>;
+        const parsed = JSON.parse(raw);
+        if (typeof parsed !== 'object' || parsed === null) continue;
+
         return {
-          rules: { ...DEFAULT_CONFIG.rules, ...parsed.rules },
-          ignore: parsed.ignore ?? DEFAULT_CONFIG.ignore,
-          include: parsed.include ?? DEFAULT_CONFIG.include,
+          rules: { ...DEFAULT_CONFIG.rules, ...(parsed.rules && typeof parsed.rules === 'object' ? parsed.rules : {}) },
+          ignore: [...DEFAULT_CONFIG.ignore, ...(Array.isArray(parsed.ignore) ? parsed.ignore : [])],
+          include: Array.isArray(parsed.include) ? parsed.include : DEFAULT_CONFIG.include,
         };
       } catch {
-        // invalid config, use defaults
+        console.warn(`Warning: could not parse config at ${p}, using defaults.`);
       }
     }
   }
 
-  return DEFAULT_CONFIG;
+  return {
+    rules: { ...DEFAULT_CONFIG.rules },
+    ignore: [...DEFAULT_CONFIG.ignore],
+    include: [...DEFAULT_CONFIG.include],
+  };
 }

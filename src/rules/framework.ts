@@ -10,7 +10,7 @@ export const frameworkRules: Rule[] = [
     languages: ['js', 'ts', 'mjs', 'cjs'],
     pattern: /(?:app|router)\.\s*(?:get|post|put|delete|patch)\s*\([^,]+,\s*async\s/,
     antiPattern: /express-async-errors|asyncHandler|catchAsync|tryCatch|wrapAsync|eslint-disable/,
-    messageTemplate: 'Async Express route without error handling. Wrap in try/catch or use an async error handler.',
+    messageTemplate: 'Async Express route may lack error handling. Wrap in try/catch or use an async error handler.',
   },
   {
     id: 'no-error-info-leak',

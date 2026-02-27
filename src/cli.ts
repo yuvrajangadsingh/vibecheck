@@ -1,10 +1,12 @@
 import { Command } from 'commander';
-import { resolve } from 'node:path';
+import { resolve, relative, dirname } from 'node:path';
 import { existsSync, statSync } from 'node:fs';
 import { loadConfig } from './config.js';
 import { scan } from './scanner.js';
 import { formatPretty, formatJSON, formatQuiet } from './formatter.js';
 import type { Severity } from './types.js';
+
+const VALID_SEVERITIES: Severity[] = ['error', 'warn', 'info'];
 
 const VERSION = '1.0.0';
 
@@ -50,20 +52,29 @@ const program = new Command()
     }
 
     if (stat.isFile()) {
-      // For single file, scan its parent and filter to just that file
-      scanRoot = resolve(resolvedPath, '..');
-      config.include = [resolvedPath];
+      // For single file, scan its parent dir and include only the filename
+      scanRoot = dirname(resolvedPath);
+      config.include = [relative(scanRoot, resolvedPath)];
     }
 
-    const result = await scan(scanRoot, config);
+    let result;
+    try {
+      result = await scan(scanRoot, config);
+    } catch (err) {
+      console.error(`Error: scan failed for "${targetPath}".`, err instanceof Error ? err.message : '');
+      process.exit(2);
+    }
 
     // Output
-    const minSeverity = (options.severity || 'warn') as Severity;
+    const severityInput = options.severity || 'warn';
+    const minSeverity: Severity = VALID_SEVERITIES.includes(severityInput as Severity)
+      ? (severityInput as Severity)
+      : 'warn';
 
     if (options.json) {
-      console.log(formatJSON(result));
+      console.log(formatJSON(result, minSeverity));
     } else if (options.quiet) {
-      console.log(formatQuiet(result));
+      console.log(formatQuiet(result, minSeverity));
     } else {
       console.log(`\n  vibecheck v${VERSION}\n`);
       console.log(formatPretty(result, minSeverity));

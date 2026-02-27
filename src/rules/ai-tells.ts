@@ -8,7 +8,7 @@ export const aiTellRules: Rule[] = [
     category: 'ai-tell',
     severity: 'info',
     languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'],
-    pattern: /\/\/\s*(?:increment|decrement|initialize|declare|define|create|set|get|return|check|loop|iterate|import|require|export|assign|call|invoke|update|fetch|retrieve|store|save|log|print|handle|process)\s+(?:the\s+)?(?:a\s+)?\w+/i,
+    pattern: /\/\/\s*(?:increment|decrement|initialize|declare|define|create|set|get|return|check|loop|iterate|import|require|export|assign|call|invoke|update|fetch|retrieve|store|save|log|print|handle|process)\s+(?:the\s+)?(?:a\s+)?\w+\s*$/i,
     antiPattern: /eslint-disable|@ts-|@type|@param|@returns|jsdoc|TODO|FIXME|NOTE|HACK|BUG|WARN/i,
     messageTemplate: 'Comment restates what the code does. Remove it or explain WHY instead.',
   },

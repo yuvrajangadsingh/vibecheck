@@ -64,6 +64,10 @@ describe('security rules', () => {
   it('detects SQL concatenation', () => {
     expect(sqlRule.pattern.test('`SELECT * FROM users WHERE id = ${userId}`')).toBe(true);
   });
+
+  it('detects SQL string concat after closing quote', () => {
+    expect(sqlRule.pattern.test("const q = 'SELECT * FROM users WHERE id = ' + userId;")).toBe(true);
+  });
 });
 
 describe('error handling rules', () => {
@@ -83,6 +87,12 @@ describe('error handling rules', () => {
     expect(findings.length).toBe(1);
   });
 
+  it('detects parameterless empty catch (ES2019+)', () => {
+    const lines = ['try {', '  doSomething();', '} catch {', '}'];
+    const findings = emptyCatch.detect(lines, 'test.ts');
+    expect(findings.length).toBe(1);
+  });
+
   it('skips non-empty catch blocks', () => {
     const lines = ['try {', '  doSomething();', '} catch (e) {', '  throw e;', '}'];
     const findings = emptyCatch.detect(lines, 'test.ts');
@@ -97,6 +107,22 @@ describe('error handling rules', () => {
 
   it('detects swallowed promises', () => {
     expect(swallowed.pattern.test('fetch("/api").then(r => r.json());')).toBe(true);
+  });
+
+  it('detects swallowed promises without semicolon', () => {
+    expect(swallowed.pattern.test('fetch("/api").then(r => r.json())')).toBe(true);
+  });
+
+  it('detects empty catch with multiple blank lines', () => {
+    const lines = ['try {', '  doSomething();', '} catch (e) {', '', '', '}'];
+    const findings = emptyCatch.detect(lines, 'test.ts');
+    expect(findings.length).toBe(1);
+  });
+
+  it('detects single-line console-only catch', () => {
+    const lines = ['try { foo(); } catch (e) { console.error(e); }'];
+    const findings = consoleOnly.detect(lines, 'test.ts');
+    expect(findings.length).toBe(1);
   });
 
   it('skips promises with catch', () => {
@@ -167,5 +193,50 @@ describe('code quality rules', () => {
     const lines = ['function small() {', '  return 1;', '}'];
     const findings = godFunc.detect(lines, 'test.ts');
     expect(findings.length).toBe(0);
+  });
+
+  it('does not flag if/for/while blocks as functions', () => {
+    const lines = ['if (condition) {'];
+    for (let i = 0; i < 85; i++) lines.push('  doSomething();');
+    lines.push('}');
+    const findings = godFunc.detect(lines, 'test.ts');
+    expect(findings.length).toBe(0);
+  });
+
+  it('handles braces inside strings correctly', () => {
+    const lines = ['function withStrings() {'];
+    lines.push('  const x = "}";');
+    for (let i = 0; i < 83; i++) lines.push('  doSomething();');
+    lines.push('}');
+    const findings = godFunc.detect(lines, 'test.ts');
+    expect(findings.length).toBe(1);
+  });
+});
+
+describe('framework rules', () => {
+  const expressRule = allRules.find(r => r.id === 'no-express-unhandled')!;
+  const infoLeak = allRules.find(r => r.id === 'no-error-info-leak')!;
+
+  it('detects async Express routes without error handling', () => {
+    expect(expressRule.pattern.test('app.get("/users", async (req, res) => {')).toBe(true);
+    expect(expressRule.pattern.test('router.post("/data", async (req, res) => {')).toBe(true);
+  });
+
+  it('skips sync Express routes', () => {
+    expect(expressRule.pattern.test('app.get("/users", (req, res) => {')).toBe(false);
+  });
+
+  it('skips routes with async error wrappers', () => {
+    const line = 'app.get("/safe", asyncHandler(async (req, res) => {';
+    expect(expressRule.antiPattern!.test(line)).toBe(true);
+  });
+
+  it('detects error info leaks in responses', () => {
+    expect(infoLeak.pattern.test('res.json({ error: err.message })')).toBe(true);
+    expect(infoLeak.pattern.test('res.send({ stack: error.stack })')).toBe(true);
+  });
+
+  it('skips generic error responses', () => {
+    expect(infoLeak.pattern.test('res.json({ error: "Something went wrong" })')).toBe(false);
   });
 });
