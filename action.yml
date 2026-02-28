@@ -1,0 +1,52 @@
+name: 'vibecheck'
+description: 'ESLint for AI slop. Detect AI-generated code smells in JS/TS.'
+author: 'Yuvraj Angad Singh'
+
+branding:
+  icon: 'search'
+  color: 'yellow'
+
+inputs:
+  severity:
+    description: 'Minimum severity to report: error, warn, info'
+    required: false
+    default: 'warn'
+  fail-on:
+    description: 'Fail the action if findings at this severity or above: error, warn, info, none'
+    required: false
+    default: 'error'
+  version:
+    description: 'vibecheck version to install (pin for reproducibility)'
+    required: false
+    default: 'latest'
+  ignore:
+    description: 'Comma-separated ignore patterns (e.g. "*.test.ts,dist/**")'
+    required: false
+    default: ''
+  changed-only:
+    description: 'Only report on files changed in the PR (ignored for push events)'
+    required: false
+    default: 'true'
+  github-token:
+    description: 'GitHub token for fetching PR changed files'
+    required: false
+    default: '${{ github.token }}'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Run vibecheck
+      shell: bash
+      env:
+        INPUT_SEVERITY: ${{ inputs.severity }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_IGNORE: ${{ inputs.ignore }}
+        INPUT_CHANGED_ONLY: ${{ inputs.changed-only }}
+        INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: bash "${{ github.action_path }}/action/run.sh"
