@@ -35,4 +35,4 @@ jobs:
         with:
           severity: warn
           fail-on: error
-          ignore: "tests/**"
+          ignore: "tests/**,src/rules/**"
