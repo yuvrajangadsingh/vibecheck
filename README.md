@@ -84,12 +84,38 @@ vibecheck [path] [options]
 
 Options:
   -c, --config <file>     Path to config file
+  -d, --diff              Only scan lines changed in git diff (unstaged)
+  --staged                Only scan lines changed in git diff --cached (staged)
   --json                  Output as JSON (for CI pipelines)
   --ignore <patterns...>  Additional ignore patterns
   --severity <level>      Minimum severity: error, warn, info (default: warn)
   -q, --quiet             Only show summary
   -v, --version           Show version
   -h, --help              Show help
+```
+
+## Diff mode
+
+Scan only the lines you changed, not the entire codebase. Useful for pre-commit hooks and incremental CI.
+
+```bash
+# Scan unstaged changes
+vibecheck --diff .
+
+# Scan staged changes (pre-commit hook)
+vibecheck --staged .
+
+# CI-friendly output
+vibecheck --staged --json .
+```
+
+### Pre-commit hook
+
+Add to `.git/hooks/pre-commit` or use with [husky](https://github.com/typicode/husky):
+
+```bash
+#!/bin/sh
+npx @yuvrajangadsingh/vibecheck --staged .
 ```
 
 ## Config
@@ -113,16 +139,26 @@ Create `.vibecheckrc` in your project root:
 
 All rules are on by default at their recommended severity. Set any rule to `"off"` to disable it.
 
-## CI Usage
+## GitHub Action
+
+Add vibecheck to your CI with inline PR annotations:
 
 ```yaml
-# GitHub Actions
-- name: Vibecheck
-  run: npx @yuvrajangadsingh/vibecheck . --json > vibecheck.json
+- uses: yuvrajangadsingh/vibecheck@v1.1.0
+  with:
+    severity: warn       # minimum severity to report (default: warn)
+    fail-on: error       # fail the check at this severity (default: error)
+    ignore: "tests/**"   # comma-separated ignore patterns
+```
 
-# Exit code 1 if errors found, 0 otherwise
-- name: Vibecheck (fail on errors)
-  run: npx @yuvrajangadsingh/vibecheck .
+The action automatically scans only files changed in the PR. On push events, it scans the full repo.
+
+Available on the [GitHub Marketplace](https://github.com/marketplace/actions/vibecheck-ai-slop).
+
+### Manual CI
+
+```bash
+npx @yuvrajangadsingh/vibecheck . --json > vibecheck.json
 ```
 
 ## How it works
