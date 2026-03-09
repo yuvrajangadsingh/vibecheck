@@ -1,4 +1,4 @@
-name: 'vibecheck'
+name: 'vibecheck-ai-slop'
 description: 'ESLint for AI slop. Detect AI-generated code smells in JS/TS.'
 author: 'Yuvraj Angad Singh'
 
