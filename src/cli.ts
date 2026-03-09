@@ -4,11 +4,13 @@ import { existsSync, statSync } from 'node:fs';
 import { loadConfig } from './config.js';
 import { scan } from './scanner.js';
 import { formatPretty, formatJSON, formatQuiet } from './formatter.js';
+import { getGitDiff, getGitRoot, resolveDiffPaths } from './diff.js';
 import type { Severity } from './types.js';
+import type { DiffMap } from './diff.js';
 
 const VALID_SEVERITIES: Severity[] = ['error', 'warn', 'info'];
 
-const VERSION = '1.0.1';
+const VERSION = '1.1.0';
 
 const program = new Command()
   .name('vibecheck')
@@ -20,12 +22,16 @@ const program = new Command()
   .option('--ignore <patterns...>', 'Additional ignore patterns')
   .option('--severity <level>', 'Minimum severity to report: error, warn, info', 'warn')
   .option('-q, --quiet', 'Only show summary')
+  .option('-d, --diff', 'Only scan lines changed in git diff (unstaged)')
+  .option('--staged', 'Only scan lines changed in git diff --cached (staged)')
   .action(async (targetPath: string, options: {
     config?: string;
     json?: boolean;
     ignore?: string[];
     severity?: string;
     quiet?: boolean;
+    diff?: boolean;
+    staged?: boolean;
   }) => {
     const resolvedPath = resolve(targetPath);
 
@@ -57,9 +63,30 @@ const program = new Command()
       config.include = [relative(scanRoot, resolvedPath)];
     }
 
+    // Diff mode: get changed lines from git
+    let diffMap: DiffMap | undefined;
+    if (options.diff || options.staged) {
+      try {
+        const repoRoot = getGitRoot(scanRoot);
+        const rawDiff = getGitDiff(repoRoot, !!options.staged);
+        diffMap = resolveDiffPaths(rawDiff, repoRoot, scanRoot);
+        if (diffMap.size === 0) {
+          if (options.json) {
+            console.log(JSON.stringify({ findings: [], filesScanned: 0, duration: 0, summary: { error: 0, warn: 0, info: 0 } }));
+          } else {
+            console.log('\n  No changed files to scan.\n');
+          }
+          process.exit(0);
+        }
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : 'git diff failed'}`);
+        process.exit(2);
+      }
+    }
+
     let result;
     try {
-      result = await scan(scanRoot, config);
+      result = await scan(scanRoot, config, diffMap);
     } catch (err) {
       console.error(`Error: scan failed for "${targetPath}".`, err instanceof Error ? err.message : '');
       process.exit(2);
@@ -76,7 +103,8 @@ const program = new Command()
     } else if (options.quiet) {
       console.log(formatQuiet(result, minSeverity));
     } else {
-      console.log(`\n  vibecheck v${VERSION}\n`);
+      const modeLabel = options.staged ? ' (staged)' : options.diff ? ' (diff)' : '';
+      console.log(`\n  vibecheck v${VERSION}${modeLabel}\n`);
       console.log(formatPretty(result, minSeverity));
     }
 

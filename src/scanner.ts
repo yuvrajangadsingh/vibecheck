@@ -3,6 +3,7 @@ import { relative, extname } from 'node:path';
 import fg from 'fast-glob';
 import { allRules, allMultilineRules } from './rules/index.js';
 import type { Config, Finding, ScanResult, Severity } from './types.js';
+import type { DiffMap } from './diff.js';
 
 const MAX_FILE_SIZE = 1_000_000; // 1MB
 const VALID_SEVERITIES: Severity[] = ['error', 'warn', 'info'];
@@ -18,7 +19,7 @@ function resolveSeverity(configValue: string | undefined, fallback: Severity): S
   return fallback;
 }
 
-export async function scan(targetPath: string, config: Config): Promise<ScanResult> {
+export async function scan(targetPath: string, config: Config, diffMap?: DiffMap): Promise<ScanResult> {
   const start = performance.now();
   const findings: Finding[] = [];
 
@@ -37,6 +38,12 @@ export async function scan(targetPath: string, config: Config): Promise<ScanResu
   let scannedCount = 0;
 
   for (const filePath of files) {
+    const relPath = relative(targetPath, filePath);
+
+    // In diff mode, skip files not in the diff before any I/O
+    const changedLines = diffMap?.get(relPath);
+    if (diffMap && !changedLines) continue;
+
     // Skip large files
     try {
       const stat = statSync(filePath);
@@ -59,7 +66,6 @@ export async function scan(targetPath: string, config: Config): Promise<ScanResu
 
     const lang = getLanguage(filePath);
     const lines = content.split('\n');
-    const relPath = relative(targetPath, filePath);
 
     // Filter rules by language once per file
     const rulesForFile = activeRules.filter((r) => r.languages.includes(lang));
@@ -80,6 +86,9 @@ export async function scan(targetPath: string, config: Config): Promise<ScanResu
         // Check line exclusions
         if (rule.lineExclusions && rule.lineExclusions.test(line)) continue;
 
+        // In diff mode, skip findings not on changed lines
+        if (changedLines && !changedLines.has(i + 1)) continue;
+
         findings.push({
           rule: rule.id,
           severity,
@@ -99,6 +108,9 @@ export async function scan(targetPath: string, config: Config): Promise<ScanResu
 
       const multiFindings = rule.detect(lines, filePath);
       for (const mf of multiFindings) {
+        // In diff mode, skip findings not on changed lines
+        if (changedLines && !changedLines.has(mf.line)) continue;
+
         findings.push({
           rule: rule.id,
           severity,
