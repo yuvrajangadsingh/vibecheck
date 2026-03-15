@@ -18,8 +18,8 @@ export const codeQualityRules: Rule[] = [
     description: 'AI assistants leave placeholder TODOs that never get implemented.',
     category: 'code-quality',
     severity: 'info',
-    languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'],
-    pattern: /(?:\/\/|\/\*|\*)\s*(?:TODO|FIXME|HACK|XXX)\s*:?\s*(?:implement|add|fix|handle|replace|update|complete|finish|create|write|build|setup|configure|refactor)\b/i,
+    languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs', 'py'],
+    pattern: /(?:\/\/|\/\*|\*|#)\s*(?:TODO|FIXME|HACK|XXX)\s*:?\s*(?:implement|add|fix|handle|replace|update|complete|finish|create|write|build|setup|configure|refactor)\b/i,
     messageTemplate: 'AI-generated placeholder TODO found. Implement or remove it.',
   },
 ];

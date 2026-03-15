@@ -10,7 +10,7 @@ import type { DiffMap } from './diff.js';
 
 const VALID_SEVERITIES: Severity[] = ['error', 'warn', 'info'];
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 
 const program = new Command()
   .name('vibecheck')

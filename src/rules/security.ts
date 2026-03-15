@@ -7,7 +7,7 @@ export const securityRules: Rule[] = [
     description: 'Detects API keys, passwords, and tokens hardcoded in source code.',
     category: 'security',
     severity: 'error',
-    languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'],
+    languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs', 'py'],
     pattern: /(api[_-]?key|secret|password|passwd|token|auth[_-]?token|access[_-]?key|private[_-]?key)\s*[:=]\s*['"][A-Za-z0-9+/=_\-.]{16,}['"]/i,
     antiPattern: /(process\.env|import\.meta\.env|ENV\[|config\.|getenv|os\.environ|example|placeholder|xxx|your[_-]|<[A-Z_]+>|test|mock|fake|dummy|sample)/i,
     messageTemplate: 'Hardcoded secret detected. Use environment variables instead.',

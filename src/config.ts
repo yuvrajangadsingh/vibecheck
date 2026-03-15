@@ -11,6 +11,9 @@ const DEFAULT_IGNORE = [
   '.next',
   '.nuxt',
   'vendor',
+  '__pycache__',
+  '.venv',
+  'venv',
   '*.min.js',
   '*.min.mjs',
   '*.bundle.js',
@@ -19,7 +22,7 @@ const DEFAULT_IGNORE = [
   'pnpm-lock.yaml',
 ];
 
-const DEFAULT_INCLUDE = ['**/*.{js,ts,jsx,tsx,mjs,cjs}'];
+const DEFAULT_INCLUDE = ['**/*.{js,ts,jsx,tsx,mjs,cjs,py}'];
 
 const DEFAULT_CONFIG: Config = {
   rules: {},
