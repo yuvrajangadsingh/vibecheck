@@ -11,9 +11,9 @@ describe('rule definitions', () => {
     expect(unique.size).toBe(ids.length);
   });
 
-  it('should have 14 rules total', () => {
+  it('should have 24 rules total', () => {
     const total = allRules.length + allMultilineRules.length;
-    expect(total).toBe(14);
+    expect(total).toBe(24);
   });
 
   it('all rules should have required fields', () => {
@@ -238,5 +238,116 @@ describe('framework rules', () => {
 
   it('skips generic error responses', () => {
     expect(infoLeak.pattern.test('res.json({ error: "Something went wrong" })')).toBe(false);
+  });
+});
+
+describe('python rules', () => {
+  const pyEval = allRules.find(r => r.id === 'no-py-eval')!;
+  const pySql = allRules.find(r => r.id === 'no-py-sql-concat')!;
+  const bareExcept = allRules.find(r => r.id === 'no-bare-except')!;
+  const starImport = allRules.find(r => r.id === 'no-star-import')!;
+  const mutableDefault = allRules.find(r => r.id === 'no-mutable-default')!;
+  const pyPrint = allRules.find(r => r.id === 'no-py-print')!;
+  const flaskDebug = allRules.find(r => r.id === 'no-flask-debug')!;
+  const pyObvious = allRules.find(r => r.id === 'no-py-obvious-comments')!;
+  const typeIgnore = allRules.find(r => r.id === 'no-type-ignore-blanket')!;
+  const passExcept = allMultilineRules.find(r => r.id === 'no-pass-except')!;
+
+  it('detects eval/exec/os.system', () => {
+    expect(pyEval.pattern.test('result = eval(user_input)')).toBe(true);
+    expect(pyEval.pattern.test('exec("import os")')).toBe(true);
+    expect(pyEval.pattern.test('os.system("rm -rf /")')).toBe(true);
+    expect(pyEval.pattern.test('subprocess.run(cmd, shell=True)')).toBe(true);
+  });
+
+  it('skips ast.literal_eval', () => {
+    expect(pyEval.antiPattern!.test('ast.literal_eval(data)')).toBe(true);
+  });
+
+  it('detects f-string SQL', () => {
+    expect(pySql.pattern.test('f"SELECT * FROM users WHERE id = {user_id}"')).toBe(true);
+    expect(pySql.pattern.test('"DELETE FROM logs WHERE date = \'{}\'".format(date_str)')).toBe(true);
+  });
+
+  it('detects bare except', () => {
+    expect(bareExcept.pattern.test('except:')).toBe(true);
+    expect(bareExcept.pattern.test('    except:')).toBe(true);
+  });
+
+  it('skips typed except', () => {
+    expect(bareExcept.pattern.test('except ValueError:')).toBe(false);
+    expect(bareExcept.pattern.test('except Exception as e:')).toBe(false);
+  });
+
+  it('detects star imports', () => {
+    expect(starImport.pattern.test('from os import *')).toBe(true);
+    expect(starImport.pattern.test('from django.db.models import *')).toBe(true);
+  });
+
+  it('skips specific imports', () => {
+    expect(starImport.pattern.test('from os import path, getcwd')).toBe(false);
+  });
+
+  it('detects mutable default arguments', () => {
+    expect(mutableDefault.pattern.test('def process_items(items=[], cache={}):')).toBe(true);
+    expect(mutableDefault.pattern.test('def foo(data=set()):')).toBe(true);
+  });
+
+  it('skips immutable defaults', () => {
+    expect(mutableDefault.pattern.test('def func(name="default", count=0):')).toBe(false);
+  });
+
+  it('detects print statements', () => {
+    expect(pyPrint.pattern.test('print("debug value:", result)')).toBe(true);
+  });
+
+  it('detects Flask debug mode', () => {
+    expect(flaskDebug.pattern.test('app.run(debug=True, port=5000)')).toBe(true);
+  });
+
+  it('detects obvious Python comments', () => {
+    expect(pyObvious.pattern.test('# initialize the counter')).toBe(true);
+    expect(pyObvious.pattern.test('# return the result')).toBe(true);
+  });
+
+  it('skips meaningful Python comments', () => {
+    expect(pyObvious.pattern.test('# Workaround for Django ORM bug #456')).toBe(false);
+  });
+
+  it('detects blanket type: ignore', () => {
+    expect(typeIgnore.pattern.test('x: int = "hello"  # type: ignore')).toBe(true);
+  });
+
+  it('skips specific type: ignore', () => {
+    expect(typeIgnore.antiPattern!.test('x: int = foo()  # type: ignore[no-untyped-call]')).toBe(true);
+  });
+
+  it('detects except: pass (single line)', () => {
+    const lines = ['try:', '    risky()', 'except: pass'];
+    const findings = passExcept.detect(lines, 'test.py');
+    expect(findings.length).toBe(1);
+  });
+
+  it('detects except Exception: pass (multi-line)', () => {
+    const lines = ['try:', '    risky()', 'except Exception:', '    pass'];
+    const findings = passExcept.detect(lines, 'test.py');
+    expect(findings.length).toBe(1);
+  });
+
+  it('skips except with real handling', () => {
+    const lines = ['try:', '    risky()', 'except Exception as e:', '    logger.error(e)', '    raise'];
+    const findings = passExcept.detect(lines, 'test.py');
+    expect(findings.length).toBe(0);
+  });
+
+  it('detects AI TODOs in Python comments', () => {
+    const aiTodo = allRules.find(r => r.id === 'no-ai-todo')!;
+    expect(aiTodo.pattern.test('# TODO: implement error handling')).toBe(true);
+    expect(aiTodo.pattern.test('# FIXME: add validation here')).toBe(true);
+  });
+
+  it('detects hardcoded secrets in Python', () => {
+    const secrets = allRules.find(r => r.id === 'no-hardcoded-secrets')!;
+    expect(secrets.pattern.test('api_key = "xk_test_abcdef1234567890abcdef"')).toBe(true);
   });
 });

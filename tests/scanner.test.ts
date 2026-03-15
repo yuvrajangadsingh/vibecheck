@@ -10,7 +10,7 @@ describe('scanner', () => {
     const config = loadConfig();
     const result = await scan(FIXTURES_DIR, config);
 
-    expect(result.filesScanned).toBe(5);
+    expect(result.filesScanned).toBe(6);
     expect(result.findings.length).toBeGreaterThan(0);
     expect(result.summary.error).toBeGreaterThan(0);
     expect(result.duration).toBeGreaterThan(0);

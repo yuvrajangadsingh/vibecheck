@@ -3,6 +3,7 @@ import { errorHandlingRules, errorHandlingMultilineRules } from './error-handlin
 import { codeQualityRules, codeQualityMultilineRules } from './code-quality.js';
 import { aiTellRules } from './ai-tells.js';
 import { frameworkRules } from './framework.js';
+import { pythonRules, pythonMultilineRules } from './python.js';
 import type { Rule, MultilineRule } from '../types.js';
 
 export const allRules: Rule[] = [
@@ -11,9 +12,11 @@ export const allRules: Rule[] = [
   ...codeQualityRules,
   ...aiTellRules,
   ...frameworkRules,
+  ...pythonRules,
 ];
 
 export const allMultilineRules: MultilineRule[] = [
   ...errorHandlingMultilineRules,
   ...codeQualityMultilineRules,
+  ...pythonMultilineRules,
 ];
