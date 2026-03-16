@@ -34,12 +34,13 @@ npx @yuvrajangadsingh/vibecheck .
 # Install globally
 npm install -g @yuvrajangadsingh/vibecheck
 
-# Scan a specific directory
-npx @yuvrajangadsingh/vibecheck src/
-
-# Scan a single file
-npx @yuvrajangadsingh/vibecheck src/api.ts
+# Standalone binary (no Node required)
+curl -fsSL https://github.com/yuvrajangadsingh/vibecheck/releases/latest/download/vibecheck-darwin-arm64 -o vibecheck
+chmod +x vibecheck
+./vibecheck .
 ```
+
+Binaries available for macOS (arm64, x64) and Linux (x64, arm64) on the [releases page](https://github.com/yuvrajangadsingh/vibecheck/releases).
 
 ## What it catches
 
@@ -76,6 +77,20 @@ npx @yuvrajangadsingh/vibecheck src/api.ts
 |------|----------|----------------|
 | `no-express-unhandled` | warn | Async Express routes without error handling |
 | `no-error-info-leak` | error | Error internals (`err.message`, `err.stack`) leaked to HTTP responses |
+| `no-flask-debug` | warn | Flask `app.run(debug=True)` in production |
+
+### Python
+| Rule | Severity | What it detects |
+|------|----------|----------------|
+| `no-py-eval` | error | `eval()`, `exec()`, `os.system()`, `subprocess(shell=True)` |
+| `no-py-sql-concat` | error | SQL queries built with f-strings or `.format()` |
+| `no-bare-except` | error | `except:` without specifying exception type |
+| `no-pass-except` | error | `except: pass` silently swallowing errors |
+| `no-star-import` | warn | `from module import *` namespace pollution |
+| `no-mutable-default` | warn | Mutable default arguments (`def foo(bar=[])`) |
+| `no-py-print` | warn | `print()` left in production code |
+| `no-py-obvious-comments` | info | Comments restating code (`# initialize the counter`) |
+| `no-type-ignore-blanket` | warn | Blanket `# type: ignore` without specific error code |
 
 ## Options
 
@@ -144,7 +159,7 @@ All rules are on by default at their recommended severity. Set any rule to `"off
 Add vibecheck to your CI with inline PR annotations:
 
 ```yaml
-- uses: yuvrajangadsingh/vibecheck@v1.1.0
+- uses: yuvrajangadsingh/vibecheck@v1.2.0
   with:
     severity: warn       # minimum severity to report (default: warn)
     fail-on: error       # fail the check at this severity (default: error)
@@ -163,9 +178,9 @@ npx @yuvrajangadsingh/vibecheck . --json > vibecheck.json
 
 ## How it works
 
-vibecheck uses regex pattern matching to scan your JS/TS files. No AST parsing, no external APIs, no AI. Each rule has a detection pattern and an anti-pattern to reduce false positives.
+vibecheck uses regex pattern matching to scan your JS/TS/Python files. No AST parsing, no external APIs, no AI. Each rule has a detection pattern and an anti-pattern to reduce false positives.
 
-It skips `node_modules`, `dist`, `build`, lockfiles, and minified code by default.
+It skips `node_modules`, `dist`, `build`, `__pycache__`, `.venv`, lockfiles, and minified code by default.
 
 ## License
 
