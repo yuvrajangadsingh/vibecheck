@@ -40,7 +40,7 @@ chmod +x vibecheck
 ./vibecheck .
 ```
 
-Binaries available for macOS (arm64, x64) and Linux (x64, arm64) on the [releases page](https://github.com/yuvrajangadsingh/vibecheck/releases).
+Standalone binaries (built with [Bun](https://bun.sh)) available for macOS (arm64, x64) and Linux (x64, arm64) on the [releases page](https://github.com/yuvrajangadsingh/vibecheck/releases). No Node.js or npm required. Python developers can use these to scan their codebases without installing Node.
 
 ## What it catches
 
