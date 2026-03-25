@@ -1,6 +1,8 @@
 # vibecheck
 
-**ESLint for AI slop.** Catch AI-generated code smells before they hit production.
+[![npm version](https://img.shields.io/npm/v/@yuvrajangadsingh/vibecheck)](https://www.npmjs.com/package/@yuvrajangadsingh/vibecheck) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![GitHub Action](https://img.shields.io/badge/GitHub_Action-marketplace-blue)](https://github.com/marketplace/actions/vibecheck-ai-slop)
+
+**32 rules for catching AI-generated code smells.** ESLint for AI slop.
 
 ```bash
 npx @yuvrajangadsingh/vibecheck .
@@ -175,6 +177,36 @@ Available on the [GitHub Marketplace](https://github.com/marketplace/actions/vib
 ```bash
 npx @yuvrajangadsingh/vibecheck . --json > vibecheck.json
 ```
+
+## Pre-commit Hook
+
+Add vibecheck to your [pre-commit](https://pre-commit.com/) config:
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/yuvrajangadsingh/vibecheck
+    rev: v1.2.0
+    hooks:
+      - id: vibecheck
+```
+
+## How is this different from ESLint?
+
+ESLint catches syntax and style issues. vibecheck catches patterns that are specifically common in AI-generated code.
+
+| | vibecheck | ESLint | sloppylint |
+|---|---|---|---|
+| AI-specific rules | 32 | 0 | ~20 |
+| Hedging comments | yes | no | yes |
+| Stub detection | yes | no | yes |
+| Section dividers | yes | no | no |
+| Step comments | yes | no | no |
+| Deep nesting | yes | plugin | no |
+| GitHub Action | yes | community | no |
+| Pre-commit | yes | yes | no |
+| Zero config | yes | no | no |
+| Languages | JS/TS/Python | JS/TS | Python |
 
 ## How it works
 

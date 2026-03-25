@@ -43,6 +43,38 @@ function trackBraceDepth(line: string, depth: number): number {
 
 export const codeQualityMultilineRules: MultilineRule[] = [
   {
+    id: 'no-deep-nesting',
+    name: 'No Deep Nesting',
+    description: 'Code nested 4+ levels deep. AI loves nesting instead of using early returns.',
+    category: 'code-quality',
+    severity: 'warn',
+    languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'],
+    messageTemplate: 'Code nested too deeply. Use early returns or extract functions.',
+    detect(lines: string[]): MultilineFinding[] {
+      const findings: MultilineFinding[] = [];
+      const reported = new Set<number>();
+      let depth = 0;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        for (const ch of line) {
+          if (ch === '{') depth++;
+          if (ch === '}') depth--;
+        }
+        if (depth >= 5 && !reported.has(depth)) {
+          reported.add(depth);
+          findings.push({
+            line: i + 1,
+            column: 1,
+            message: `Nesting depth is ${depth}. Use early returns or extract helper functions.`,
+            snippet: line,
+          });
+        }
+        if (depth < 5) reported.clear();
+      }
+      return findings;
+    },
+  },
+  {
     id: 'no-god-function',
     name: 'No God Functions',
     description: 'Functions over 80 lines are hard to test, debug, and maintain. AI generates these frequently.',

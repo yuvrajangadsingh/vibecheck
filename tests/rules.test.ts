@@ -11,9 +11,9 @@ describe('rule definitions', () => {
     expect(unique.size).toBe(ids.length);
   });
 
-  it('should have 24 rules total', () => {
+  it('should have 32 rules total', () => {
     const total = allRules.length + allMultilineRules.length;
-    expect(total).toBe(24);
+    expect(total).toBe(32);
   });
 
   it('all rules should have required fields', () => {

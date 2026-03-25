@@ -1,0 +1,7 @@
+- id: vibecheck
+  name: vibecheck
+  description: Detect AI-generated code smells in JS/TS and Python
+  entry: npx @yuvrajangadsingh/vibecheck
+  language: node
+  types_or: [javascript, jsx, ts, tsx, python]
+  additional_dependencies: ['@yuvrajangadsingh/vibecheck@latest']
