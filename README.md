@@ -168,7 +168,7 @@ Add vibecheck to your CI with inline PR annotations:
 
 The action automatically scans only files changed in the PR. On push events, it scans the full repo.
 
-Available on the [GitHub Marketplace](https://github.com/marketplace/actions/vibecheck-ai-slop).
+Available on the [GitHub Marketplace](https://github.com/marketplace/actions/vibecheck-ai-slop). See it in action on the [demo repo](https://github.com/yuvrajangadsingh/vibecheck-demo).
 
 ### Manual CI
 
