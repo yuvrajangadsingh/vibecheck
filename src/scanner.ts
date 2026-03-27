@@ -19,6 +19,48 @@ function resolveSeverity(configValue: string | undefined, fallback: Severity): S
   return fallback;
 }
 
+/**
+ * Scan a single file's content directly (for editor integrations).
+ */
+export function scanContent(content: string, filePath: string, config: Config): Finding[] {
+  const lang = getLanguage(filePath);
+  const lines = content.split('\n');
+  const findings: Finding[] = [];
+
+  const activeRules = allRules.filter((r) => config.rules[r.id] !== 'off' && r.languages.includes(lang));
+  const activeMultilineRules = allMultilineRules.filter((r) => config.rules[r.id] !== 'off' && r.languages.includes(lang));
+
+  for (const rule of activeRules) {
+    const severity = resolveSeverity(config.rules[rule.id], rule.severity);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const match = rule.pattern.exec(line);
+      if (!match) continue;
+      if (rule.antiPattern && rule.antiPattern.test(line)) continue;
+      if (rule.lineExclusions && rule.lineExclusions.test(line)) continue;
+      findings.push({
+        rule: rule.id, severity, category: rule.category,
+        file: filePath, line: i + 1, column: match.index + 1,
+        message: rule.messageTemplate, snippet: line.trim(),
+      });
+    }
+  }
+
+  for (const rule of activeMultilineRules) {
+    const severity = resolveSeverity(config.rules[rule.id], rule.severity);
+    for (const mf of rule.detect(lines, filePath)) {
+      findings.push({
+        rule: rule.id, severity, category: rule.category,
+        file: filePath, line: mf.line, column: mf.column,
+        message: mf.message, snippet: mf.snippet.trim(),
+      });
+    }
+  }
+
+  findings.sort((a, b) => a.line - b.line);
+  return findings;
+}
+
 export async function scan(targetPath: string, config: Config, diffMap?: DiffMap): Promise<ScanResult> {
   const start = performance.now();
   const findings: Finding[] = [];

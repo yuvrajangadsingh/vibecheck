@@ -1,6 +1,6 @@
 {
   "name": "@yuvrajangadsingh/vibecheck",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "ESLint for AI slop. 32 rules for catching AI-generated code smells in JS/TS and Python.",
   "type": "module",
   "bin": {
