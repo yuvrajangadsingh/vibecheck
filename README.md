@@ -161,10 +161,10 @@ All rules are on by default at their recommended severity. Set any rule to `"off
 Get inline diagnostics (squigglies) right in your editor:
 
 ```
-ext install YuvrajAngadSinghyuvrajangadsingh.vibecheck-ai-slop
+ext install yuvrajangadsingh.vibecheck-linter
 ```
 
-Available on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=YuvrajAngadSinghyuvrajangadsingh.vibecheck-ai-slop). Works in VS Code, Cursor, and Windsurf.
+Available on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=yuvrajangadsingh.vibecheck-linter). Works in VS Code, Cursor, and Windsurf.
 
 Features: inline error/warning/info markers, Problems panel integration, status bar count, runs on save.
 
