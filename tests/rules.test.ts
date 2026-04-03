@@ -11,9 +11,9 @@ describe('rule definitions', () => {
     expect(unique.size).toBe(ids.length);
   });
 
-  it('should have 32 rules total', () => {
+  it('should have 34 rules total', () => {
     const total = allRules.length + allMultilineRules.length;
-    expect(total).toBe(32);
+    expect(total).toBe(34);
   });
 
   it('all rules should have required fields', () => {
@@ -349,5 +349,77 @@ describe('python rules', () => {
   it('detects hardcoded secrets in Python', () => {
     const secrets = allRules.find(r => r.id === 'no-hardcoded-secrets')!;
     expect(secrets.pattern.test('api_key = "xk_test_abcdef1234567890abcdef"')).toBe(true);
+  });
+});
+
+describe('hallucinated import rules', () => {
+  const jsRule = allRules.find(r => r.id === 'no-hallucinated-import-js')!;
+  const pyRule = allRules.find(r => r.id === 'no-hallucinated-import-py')!;
+
+  it('detects hallucinated ES import', () => {
+    expect(jsRule.pattern.test("import Anthropic from '@anthropic/sdk'")).toBe(true);
+    expect(jsRule.pattern.test("import { decode } from 'jwt-decode-utils'")).toBe(true);
+  });
+
+  it('detects hallucinated require()', () => {
+    expect(jsRule.pattern.test("const cron = require('node-cron-scheduler')")).toBe(true);
+    expect(jsRule.pattern.test('const plugin = require("webpack-bundle-analyzer-plugin")')).toBe(true);
+  });
+
+  it('detects hallucinated dynamic import()', () => {
+    expect(jsRule.pattern.test("const mod = import('@anthropic/sdk')")).toBe(true);
+    expect(jsRule.pattern.test("await import('jwt-decode-utils')")).toBe(true);
+  });
+
+  it('detects hallucinated export from', () => {
+    expect(jsRule.pattern.test("export { default } from '@openai/api'")).toBe(true);
+    expect(jsRule.pattern.test("export * from '@langchain/agents'")).toBe(true);
+  });
+
+  it('detects hallucinated scoped packages', () => {
+    expect(jsRule.pattern.test("import { OpenAI } from '@openai/api'")).toBe(true);
+    expect(jsRule.pattern.test("import { Agent } from '@langchain/agents'")).toBe(true);
+    expect(jsRule.pattern.test("import type { Router } from '@types/react-router-v5'")).toBe(true);
+  });
+
+  it('skips real JS packages', () => {
+    expect(jsRule.pattern.test("import Anthropic from '@anthropic-ai/sdk'")).toBe(false);
+    expect(jsRule.pattern.test("import OpenAI from 'openai'")).toBe(false);
+    expect(jsRule.pattern.test("import { decode } from 'jwt-decode'")).toBe(false);
+    expect(jsRule.pattern.test("import cron from 'node-cron'")).toBe(false);
+  });
+
+  it('skips JS comments and strings', () => {
+    expect(jsRule.antiPattern!.test("// import from '@anthropic/sdk'")).toBe(true);
+    expect(jsRule.antiPattern!.test("/* require('@openai/api') */")).toBe(true);
+  });
+
+  it('detects hallucinated Python imports', () => {
+    expect(pyRule.pattern.test('import pandas_profiler')).toBe(true);
+    expect(pyRule.pattern.test('from langchain_agents import Agent')).toBe(true);
+    expect(pyRule.pattern.test('import anthropic_sdk')).toBe(true);
+    expect(pyRule.pattern.test('from chromadb_utils import something')).toBe(true);
+  });
+
+  it('detects indented Python imports', () => {
+    expect(pyRule.pattern.test('    import pandas_profiler')).toBe(true);
+    expect(pyRule.pattern.test('        from langchain_agents import Agent')).toBe(true);
+  });
+
+  it('detects comma-separated Python imports', () => {
+    expect(pyRule.pattern.test('import anthropic_sdk, os')).toBe(true);
+  });
+
+  it('skips Python comments', () => {
+    expect(pyRule.antiPattern!.test('# import anthropic_sdk')).toBe(true);
+    expect(pyRule.antiPattern!.test('  # from langchain_agents import x')).toBe(true);
+  });
+
+  it('skips real Python packages', () => {
+    expect(pyRule.pattern.test('import anthropic')).toBe(false);
+    expect(pyRule.pattern.test('from openai import OpenAI')).toBe(false);
+    expect(pyRule.pattern.test('import langchain')).toBe(false);
+    expect(pyRule.pattern.test('from flask_cors import CORS')).toBe(false);
+    expect(pyRule.pattern.test('import chromadb')).toBe(false);
   });
 });
