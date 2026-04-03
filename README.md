@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@yuvrajangadsingh/vibecheck)](https://www.npmjs.com/package/@yuvrajangadsingh/vibecheck) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![GitHub Action](https://img.shields.io/badge/GitHub_Action-marketplace-blue)](https://github.com/marketplace/actions/vibecheck-ai-slop)
 
-**32 rules for catching AI-generated code smells.** ESLint for AI slop.
+**34 rules for catching AI-generated code smells.** ESLint for AI slop.
 
 ```bash
 npx @yuvrajangadsingh/vibecheck .
