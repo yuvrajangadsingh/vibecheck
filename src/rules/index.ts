@@ -4,6 +4,7 @@ import { codeQualityRules, codeQualityMultilineRules } from './code-quality.js';
 import { aiTellRules } from './ai-tells.js';
 import { frameworkRules } from './framework.js';
 import { pythonRules, pythonMultilineRules } from './python.js';
+import { hallucinatedImportRules } from './hallucinated-imports.js';
 import type { Rule, MultilineRule } from '../types.js';
 
 export const allRules: Rule[] = [
@@ -13,6 +14,7 @@ export const allRules: Rule[] = [
   ...aiTellRules,
   ...frameworkRules,
   ...pythonRules,
+  ...hallucinatedImportRules,
 ];
 
 export const allMultilineRules: MultilineRule[] = [
