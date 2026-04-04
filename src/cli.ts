@@ -10,7 +10,7 @@ import type { DiffMap } from './diff.js';
 
 const VALID_SEVERITIES: Severity[] = ['error', 'warn', 'info'];
 
-const VERSION = '1.2.0';
+const VERSION = '1.5.0';
 
 const program = new Command()
   .name('vibecheck')
@@ -24,6 +24,7 @@ const program = new Command()
   .option('-q, --quiet', 'Only show summary')
   .option('-d, --diff', 'Only scan lines changed in git diff (unstaged)')
   .option('--staged', 'Only scan lines changed in git diff --cached (staged)')
+  .option('--mcp', 'Start MCP server (stdio transport) for AI agent integration')
   .action(async (targetPath: string, options: {
     config?: string;
     json?: boolean;
@@ -32,7 +33,14 @@ const program = new Command()
     quiet?: boolean;
     diff?: boolean;
     staged?: boolean;
+    mcp?: boolean;
   }) => {
+    if (options.mcp) {
+      const { startMcpServer } = await import('./mcp.js');
+      await startMcpServer();
+      return;
+    }
+
     const resolvedPath = resolve(targetPath);
 
     if (!existsSync(resolvedPath)) {

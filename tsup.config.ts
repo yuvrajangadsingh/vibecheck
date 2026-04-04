@@ -18,4 +18,12 @@ export default defineConfig([
     sourcemap: true,
     splitting: false,
   },
+  {
+    entry: { mcp: 'src/mcp.ts' },
+    format: ['esm'],
+    target: 'node18',
+    sourcemap: true,
+    banner: { js: '#!/usr/bin/env node' },
+    splitting: false,
+  },
 ]);
