@@ -1,8 +1,10 @@
 # vibecheck
 
-[![npm version](https://img.shields.io/npm/v/@yuvrajangadsingh/vibecheck)](https://www.npmjs.com/package/@yuvrajangadsingh/vibecheck) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![GitHub Action](https://img.shields.io/badge/GitHub_Action-marketplace-blue)](https://github.com/marketplace/actions/vibecheck-ai-slop)
+[![npm version](https://img.shields.io/npm/v/@yuvrajangadsingh/vibecheck)](https://www.npmjs.com/package/@yuvrajangadsingh/vibecheck) [![License: FSL](https://img.shields.io/badge/License-FSL--1.1-blue.svg)](https://fsl.software/) [![GitHub Action](https://img.shields.io/badge/GitHub_Action-marketplace-blue)](https://github.com/marketplace/actions/vibecheck-ai-slop)
 
 **34 rules for catching AI-generated code smells.** ESLint for AI slop.
+
+<img src="demo.gif" alt="vibecheck demo" width="700">
 
 ```bash
 npx @yuvrajangadsingh/vibecheck .
