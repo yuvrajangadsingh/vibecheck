@@ -230,4 +230,4 @@ It skips `node_modules`, `dist`, `build`, `__pycache__`, `.venv`, lockfiles, and
 
 ## License
 
-MIT
+[FSL-1.1-Apache-2.0](LICENSE)
