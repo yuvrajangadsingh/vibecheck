@@ -32,6 +32,9 @@
   ],
   "author": "Yuvraj Angad Singh",
   "license": "FSL-1.1-Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/yuvrajangadsingh/vibecheck.git"

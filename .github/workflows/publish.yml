@@ -17,11 +17,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           registry-url: https://registry.npmjs.org
 
       - run: npm ci
       - run: npm run build
       - run: npm test
 
-      - run: npm publish --provenance --access public
+      - run: npm publish --provenance
