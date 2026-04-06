@@ -4,7 +4,8 @@
   "description": "ESLint for AI slop. 34 rules for catching AI-generated code smells in JS/TS and Python.",
   "type": "module",
   "bin": {
-    "vibecheck": "./dist/cli.js"
+    "vibecheck": "./dist/cli.js",
+    "vibecheck-mcp": "./dist/mcp.js"
   },
   "main": "./dist/index.js",
   "files": [
@@ -25,7 +26,9 @@
     "vibe-coding",
     "code-quality",
     "security",
-    "cli"
+    "cli",
+    "mcp",
+    "model-context-protocol"
   ],
   "author": "Yuvraj Angad Singh",
   "license": "FSL-1.1-Apache-2.0",

@@ -109,6 +109,7 @@ Options:
   --ignore <patterns...>  Additional ignore patterns
   --severity <level>      Minimum severity: error, warn, info (default: warn)
   -q, --quiet             Only show summary
+  --mcp                   Start MCP server (stdio transport)
   -v, --version           Show version
   -h, --help              Show help
 ```
@@ -205,13 +206,40 @@ repos:
       - id: vibecheck
 ```
 
+## MCP Server
+
+vibecheck ships with a built-in [MCP](https://modelcontextprotocol.io) server so AI coding agents can scan code for slop automatically.
+
+```bash
+# Start the MCP server
+vibecheck --mcp
+
+# Or use the dedicated binary
+vibecheck-mcp
+```
+
+Add to your Claude Code, Cursor, or Windsurf config:
+
+```json
+{
+  "mcpServers": {
+    "vibecheck": {
+      "command": "npx",
+      "args": ["-y", "@yuvrajangadsingh/vibecheck", "--mcp"]
+    }
+  }
+}
+```
+
+3 tools available: `scan-files` (scan files/directories), `scan-diff` (scan a git diff), `get-rules` (list all rules).
+
 ## How is this different from ESLint?
 
 ESLint catches syntax and style issues. vibecheck catches patterns that are specifically common in AI-generated code.
 
 | | vibecheck | ESLint | sloppylint |
 |---|---|---|---|
-| AI-specific rules | 32 | 0 | ~20 |
+| AI-specific rules | 34 | 0 | ~20 |
 | Hedging comments | yes | no | yes |
 | Stub detection | yes | no | yes |
 | Section dividers | yes | no | no |
