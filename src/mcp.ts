@@ -6,7 +6,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { scan, scanContent, loadConfig, allRules, allMultilineRules, parseDiff } from './index.js';
 import type { Finding } from './types.js';
 
-const VERSION = '1.7.0';
+const VERSION = '1.7.1';
 
 function formatFindings(findings: Finding[]): string {
   if (findings.length === 0) return 'No issues found.';
