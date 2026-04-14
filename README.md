@@ -239,16 +239,29 @@ ESLint catches syntax and style issues. vibecheck catches patterns that are spec
 
 | | vibecheck | ESLint | sloppylint |
 |---|---|---|---|
-| AI-specific rules | 34 | 0 | ~20 |
+| AI-specific rules | 34 | 0 | 100+ |
 | Hedging comments | yes | no | yes |
+| Hallucinated imports | yes | no | yes |
 | Stub detection | yes | no | yes |
 | Section dividers | yes | no | no |
 | Step comments | yes | no | no |
 | Deep nesting | yes | plugin | no |
 | GitHub Action | yes | community | no |
-| Pre-commit | yes | yes | no |
+| MCP server | yes | no | no |
+| VS Code extension | yes | yes | no |
 | Zero config | yes | no | no |
 | Languages | JS/TS/Python | JS/TS | Python |
+
+## Real-world results
+
+Scanned 31 repos built with Cursor, Bolt, Lovable, Replit, and v0:
+
+- **14,695 issues** across 3,597 files
+- **46%** of all issues were deep nesting
+- Cursor repos averaged 6.36 issues/file (highest)
+- Each tool leaves a different fingerprint
+
+[Full writeup with per-tool breakdowns](https://dev.to/yuvrajangadsingh/i-scanned-31-ai-built-repos-each-tool-leaves-behind-a-different-mess-4k3)
 
 ## How it works
 

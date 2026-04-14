@@ -3,3 +3,5 @@ dist
 *.tgz
 .DS_Store
 PLAN.md
+CLAUDE.md
+TODO.md
