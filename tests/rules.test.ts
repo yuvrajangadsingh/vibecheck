@@ -11,9 +11,9 @@ describe('rule definitions', () => {
     expect(unique.size).toBe(ids.length);
   });
 
-  it('should have 34 rules total', () => {
+  it('should have 35 rules total', () => {
     const total = allRules.length + allMultilineRules.length;
-    expect(total).toBe(34);
+    expect(total).toBe(35);
   });
 
   it('all rules should have required fields', () => {
@@ -349,6 +349,112 @@ describe('python rules', () => {
   it('detects hardcoded secrets in Python', () => {
     const secrets = allRules.find(r => r.id === 'no-hardcoded-secrets')!;
     expect(secrets.pattern.test('api_key = "xk_test_abcdef1234567890abcdef"')).toBe(true);
+  });
+});
+
+describe('no-unused-protocol rule', () => {
+  const rule = allMultilineRules.find(r => r.id === 'no-unused-protocol')!;
+
+  it('flags an orphan Protocol with no other references', () => {
+    const lines = [
+      'from typing import Protocol',
+      '',
+      'class UserService(Protocol):',
+      '    def get_user(self, id: int) -> dict: ...',
+      '',
+      'def main():',
+      '    print("hello")',
+    ];
+    const findings = rule.detect(lines, 'app.py');
+    expect(findings.length).toBe(1);
+    expect(findings[0].line).toBe(3);
+  });
+
+  it('does not flag a Protocol that is referenced as a type hint', () => {
+    const lines = [
+      'from typing import Protocol',
+      '',
+      'class UserService(Protocol):',
+      '    def get_user(self, id: int) -> dict: ...',
+      '',
+      'def fetch(svc: UserService) -> dict:',
+      '    return svc.get_user(1)',
+    ];
+    const findings = rule.detect(lines, 'app.py');
+    expect(findings.length).toBe(0);
+  });
+
+  it('handles multi-base protocols like class Foo(Generic[T], Protocol)', () => {
+    const lines = [
+      'from typing import Protocol, Generic, TypeVar',
+      '',
+      'T = TypeVar("T")',
+      '',
+      'class Repository(Generic[T], Protocol):',
+      '    def find(self, id: int) -> T: ...',
+      '',
+      'def boot(): pass',
+    ];
+    const findings = rule.detect(lines, 'app.py');
+    expect(findings.length).toBe(1);
+    expect(findings[0].line).toBe(5);
+  });
+
+  it('handles qualified Protocol like typing.Protocol', () => {
+    const lines = [
+      'import typing',
+      '',
+      'class Cache(typing.Protocol):',
+      '    def get(self, key: str) -> str: ...',
+    ];
+    const findings = rule.detect(lines, 'app.py');
+    expect(findings.length).toBe(1);
+  });
+
+  it('exempts a Protocol that is listed in __all__', () => {
+    const lines = [
+      'from typing import Protocol',
+      '',
+      '__all__ = ["UserService"]',
+      '',
+      'class UserService(Protocol):',
+      '    def get_user(self, id: int) -> dict: ...',
+    ];
+    const findings = rule.detect(lines, 'types.py');
+    expect(findings.length).toBe(0);
+  });
+
+  it('still flags an orphan Protocol when __all__ exists but excludes it', () => {
+    const lines = [
+      'from typing import Protocol',
+      '',
+      '__all__ = ["SomethingElse"]',
+      '',
+      'class GhostScaffold(Protocol):',
+      '    def get(self, key: str) -> str: ...',
+      '',
+      'def something_else(): pass',
+    ];
+    const findings = rule.detect(lines, 'types.py');
+    expect(findings.length).toBe(1);
+    expect(findings[0].line).toBe(5);
+  });
+
+
+  it('flags multiple orphan protocols in the same file', () => {
+    const lines = [
+      'from typing import Protocol',
+      '',
+      'class Reader(Protocol):',
+      '    def read(self) -> str: ...',
+      '',
+      'class Writer(Protocol):',
+      '    def write(self, s: str) -> None: ...',
+      '',
+      'print("hi")',
+    ];
+    const findings = rule.detect(lines, 'app.py');
+    expect(findings.length).toBe(2);
   });
 });
 

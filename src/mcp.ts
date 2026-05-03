@@ -6,7 +6,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { scan, scanContent, loadConfig, allRules, allMultilineRules, parseDiff } from './index.js';
 import type { Finding } from './types.js';
 
-const VERSION = '1.7.1';
+const VERSION = '1.8.0';
 
 function formatFindings(findings: Finding[]): string {
   if (findings.length === 0) return 'No issues found.';
@@ -80,7 +80,7 @@ export async function startMcpServer() {
 
   server.tool(
     'scan-files',
-    'Scan files or directories for AI-generated code smells (34 rules: security, error handling, code quality, AI tells, framework). Returns findings with file, line, severity, and message.',
+    'Scan files or directories for AI-generated code smells (35 rules: security, error handling, code quality, AI tells, framework). Returns findings with file, line, severity, and message.',
     {
       paths: z.array(z.string()).describe('Absolute file or directory paths to scan'),
       config_path: z.string().optional().describe('Path to vibecheck config file'),

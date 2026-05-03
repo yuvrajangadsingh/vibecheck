@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@yuvrajangadsingh/vibecheck)](https://www.npmjs.com/package/@yuvrajangadsingh/vibecheck) [![License: FSL](https://img.shields.io/badge/License-FSL--1.1-blue.svg)](https://fsl.software/) [![GitHub Action](https://img.shields.io/badge/GitHub_Action-marketplace-blue)](https://github.com/marketplace/actions/vibecheck-ai-slop)
 
-**34 rules for catching AI-generated code smells.** ESLint for AI slop.
+**35 rules for catching AI-generated code smells.** ESLint for AI slop.
 
 <img src="demo.gif" alt="vibecheck demo" width="700">
 
@@ -94,7 +94,10 @@ Standalone binaries (built with [Bun](https://bun.sh)) available for macOS (arm6
 | `no-mutable-default` | warn | Mutable default arguments (`def foo(bar=[])`) |
 | `no-py-print` | warn | `print()` left in production code |
 | `no-py-obvious-comments` | info | Comments restating code (`# initialize the counter`) |
+| `no-py-stub-function` | warn | Stub functions raising `NotImplementedError` with no body |
+| `no-py-hedging-comments` | info | Hedging comments (`# should work`, `# might not be ideal`) |
 | `no-type-ignore-blanket` | warn | Blanket `# type: ignore` without specific error code |
+| `no-unused-protocol` | info | `Protocol` class defined but never referenced (AI ghost scaffold from a previous iteration) |
 
 ## Options
 

@@ -126,6 +126,55 @@ export const pythonRules: Rule[] = [
 
 export const pythonMultilineRules: MultilineRule[] = [
   {
+    id: 'no-unused-protocol',
+    name: 'No Unused Protocol',
+    description: 'Protocol class defined but never referenced in the file. AI scaffold from a previous iteration that the model abandoned.',
+    category: 'ai-tell',
+    severity: 'info',
+    languages: ['py'],
+    messageTemplate: 'Protocol class is defined but never used in this file. Likely AI ghost scaffold from a previous iteration.',
+    detect(lines: string[]): MultilineFinding[] {
+      const findings: MultilineFinding[] = [];
+
+      // Parse __all__ to get exported names. Only those names are exempt (cross-file usage assumed).
+      const exportedNames = new Set<string>();
+      const allMatch = lines.join('\n').match(/__all__\s*[:=]\s*[\[\(]([^\])]*)[\]\)]/);
+      if (allMatch) {
+        for (const m of allMatch[1].matchAll(/['"]([^'"]+)['"]/g)) {
+          exportedNames.add(m[1]);
+        }
+      }
+
+      // Match Protocol anywhere in the base list (handles class Foo(Generic[T], Protocol): and class Foo(typing.Protocol):)
+      const protocolDef = /^\s*class\s+(\w+)\s*\((?:[^)]*,\s*)?(?:[\w.]+\.)?Protocol(?:\s*,\s*[^)]*)?\)\s*:/;
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const m = line.match(protocolDef);
+        if (!m) continue;
+        const name = m[1];
+
+        // Exempt only this Protocol if it's exported via __all__
+        if (exportedNames.has(name)) continue;
+
+        // Build search body by excluding the exact def line by index (not string replace, which can hit duplicates)
+        const body = lines.slice(0, i).concat(lines.slice(i + 1)).join('\n');
+        const refRegex = new RegExp(`\\b${name}\\b`, 'g');
+        const refCount = (body.match(refRegex) || []).length;
+
+        if (refCount === 0) {
+          findings.push({
+            line: i + 1,
+            column: line.search(/class/) + 1,
+            message: `Protocol class "${name}" is defined but never used in this file. Likely AI ghost scaffold from a previous iteration.`,
+            snippet: line,
+          });
+        }
+      }
+      return findings;
+    },
+  },
+  {
     id: 'no-pass-except',
     name: 'No Pass in Except',
     description: 'except: pass silently swallows all errors, hiding bugs.',
