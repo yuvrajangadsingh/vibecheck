@@ -22,6 +22,17 @@ export const codeQualityRules: Rule[] = [
     pattern: /(?:\/\/|\/\*|\*|#)\s*(?:TODO|FIXME|HACK|XXX)\s*:?\s*(?:implement|add|fix|handle|replace|update|complete|finish|create|write|build|setup|configure|refactor)\b/i,
     messageTemplate: 'AI-generated placeholder TODO found. Implement or remove it.',
   },
+  {
+    id: 'no-double-assertion',
+    name: 'No Double Type Assertion',
+    description: 'Chained type assertions like `as unknown as T` bypass TypeScript safety. AI chains these to silence type errors it does not understand.',
+    category: 'code-quality',
+    severity: 'warn',
+    languages: ['ts', 'tsx'],
+    pattern: /\bas\s+(?:unknown|any|never|const|[A-Za-z_$][\w$]*(?:\s*<[^;\n]*?>)?(?:\s*\[\])?)\s*\)?\s+as\s+(?:unknown|any|never|const|[A-Za-z_$][\w$]*(?:\s*<[^;\n]*?>)?(?:\s*\[\])?)/,
+    antiPattern: /^\s*(?:\/\/|\/\*|\*)|eslint-disable|@ts-expect-error|@ts-ignore|\/\/\s*(?:safe|intentional|vibecheck-ignore)|\/\*\s*(?:safe|intentional|vibecheck-ignore)/i,
+    messageTemplate: 'Double type assertion bypasses TypeScript safety. Isolate and justify, or refactor to a safer cast.',
+  },
 ];
 
 const CONTROL_FLOW_KEYWORDS = /^(if|else|for|while|do|switch|catch|finally|with|return|throw|new|delete|typeof|void|yield|await|class|try|import|export|from|as)$/;
