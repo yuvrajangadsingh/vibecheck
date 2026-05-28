@@ -639,4 +639,23 @@ describe('no-with-router rule', () => {
     expect(findings.length).toBe(1);
     expect(findings[0].line).toBe(2);
   });
+
+  it('flags withRouter<Props>(Component) TypeScript generic call', () => {
+    const lines = [
+      "import { withRouter } from 'react-router-dom';",
+      'export default withRouter<Props>(MyComponent);',
+    ];
+    const findings = rule.detect(lines, 'app.tsx');
+    expect(findings.length).toBe(1);
+    expect(findings[0].line).toBe(2);
+  });
+
+  it('does not flag MyModule.withRouter<Props>(X) (property access with generics)', () => {
+    const lines = [
+      "import { withRouter } from 'react-router-dom';",
+      'MyModule.withRouter<Props>(X);',
+    ];
+    const findings = rule.detect(lines, 'app.tsx');
+    expect(findings.length).toBe(0);
+  });
 });

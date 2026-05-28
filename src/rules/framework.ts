@@ -167,7 +167,7 @@ export const frameworkMultilineRules: MultilineRule[] = [
         if (/^\s*(?:\/\/|\/\*|\*)/.test(line)) continue;
 
         for (const localName of localNames) {
-          const usagePattern = new RegExp(`(?<![\\w$.])${escapeRegExp(localName)}\\s*\\(`);
+          const usagePattern = new RegExp(`(?<![\\w$.])${escapeRegExp(localName)}\\s*(?:<[^;\\n]*?>\\s*)?\\(`);
           const match = usagePattern.exec(line);
           if (match) {
             findings.push({
