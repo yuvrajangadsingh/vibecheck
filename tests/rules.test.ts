@@ -11,9 +11,9 @@ describe('rule definitions', () => {
     expect(unique.size).toBe(ids.length);
   });
 
-  it('should have 35 rules total', () => {
+  it('should have 36 rules total', () => {
     const total = allRules.length + allMultilineRules.length;
-    expect(total).toBe(35);
+    expect(total).toBe(36);
   });
 
   it('all rules should have required fields', () => {
@@ -527,5 +527,75 @@ describe('hallucinated import rules', () => {
     expect(pyRule.pattern.test('import langchain')).toBe(false);
     expect(pyRule.pattern.test('from flask_cors import CORS')).toBe(false);
     expect(pyRule.pattern.test('import chromadb')).toBe(false);
+  });
+});
+
+describe('no-with-router rule', () => {
+  const rule = allMultilineRules.find(r => r.id === 'no-with-router')!;
+
+  it('flags withRouter imported from react-router-dom and used as HOC', () => {
+    const lines = [
+      "import { withRouter } from 'react-router-dom';",
+      'export default withRouter(MyComponent);',
+    ];
+    const findings = rule.detect(lines, 'app.tsx');
+    expect(findings.length).toBe(1);
+    expect(findings[0].line).toBe(2);
+  });
+
+  it('flags aliased withRouter import from react-router', () => {
+    const lines = [
+      "import { Link, withRouter as withRR } from 'react-router';",
+      'export default withRR(MyComponent);',
+    ];
+    const findings = rule.detect(lines, 'app.tsx');
+    expect(findings.length).toBe(1);
+    expect(findings[0].line).toBe(2);
+  });
+
+  it('flags CommonJS require destructure of withRouter', () => {
+    const lines = [
+      "const { withRouter } = require('react-router-dom');",
+      'module.exports = withRouter(MyComponent);',
+    ];
+    const findings = rule.detect(lines, 'app.js');
+    expect(findings.length).toBe(1);
+    expect(findings[0].line).toBe(2);
+  });
+
+  it('does not flag local definition unrelated to react-router', () => {
+    const lines = [
+      'const withRouter = compose(router, options);',
+      'export default withRouter(MyComponent);',
+    ];
+    const findings = rule.detect(lines, 'app.ts');
+    expect(findings.length).toBe(0);
+  });
+
+  it('does not flag withRouter imported from a local module', () => {
+    const lines = [
+      "import { withRouter } from './routing';",
+      'export default withRouter(MyComponent);',
+    ];
+    const findings = rule.detect(lines, 'app.tsx');
+    expect(findings.length).toBe(0);
+  });
+
+  it('does not flag react-router-dom imports that do not include withRouter', () => {
+    const lines = [
+      "import { useNavigate } from 'react-router-dom';",
+      'const navigate = useNavigate();',
+    ];
+    const findings = rule.detect(lines, 'app.tsx');
+    expect(findings.length).toBe(0);
+  });
+
+  it('respects antiPattern marker on the import line (legacy / react-router-v5)', () => {
+    const lines = [
+      "import { withRouter } from 'react-router-dom'; // legacy react-router-v5",
+      'export default withRouter(MyComponent);',
+    ];
+    const findings = rule.detect(lines, 'app.tsx');
+    expect(findings.length).toBe(0);
   });
 });
