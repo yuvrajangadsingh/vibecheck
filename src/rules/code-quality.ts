@@ -29,8 +29,8 @@ export const codeQualityRules: Rule[] = [
     category: 'code-quality',
     severity: 'warn',
     languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs', 'py'],
-    pattern: /^\s*(?:\/\/|\/\*+|\*|#)\s*(?:(?:generated|created|written|authored|co-?authored|made|produced)\s+(?:by|with|using)\s+(?:chatgpt|gpt-?\d(?:[.\w-]*)?|claude(?:\s+code)?|anthropic(?:\s+claude)?|openai|copilot|gemini)|(?:ai|llm)[-\s]*generated|(?:chatgpt|gpt-?\d(?:[.\w-]*)?|claude(?:\s+code)?|anthropic\s+claude|copilot|gemini)\s+(?:generated|wrote|created|authored|made|produced)\b|co-?authored-by:\s*(?:claude|chatgpt|openai|anthropic|copilot|gemini)|(?:anthropic\s+claude|claude\s+code|chatgpt|gpt-?\d(?:[.\w-]*)?)\s*(?:\*\/)?\s*$)/i,
-    antiPattern: /(?:anti-?pattern|example|fixture|snapshot|golden|test\s+case|do\s+not|don't|dont|avoid|docs?|readme|changelog|prompt|expected|should\s+(?:flag|match|skip|not\s+match)|eslint-disable|vibecheck-ignore)/i,
+    pattern: /^\s*(?:\/\/|\/\*+|\*|#)\s*(?:(?:generated|created|written|authored|co-?authored|made|produced)\s+(?:by|with|using)\s+(?:chatgpt|gpt-?\d(?:[.\w-]*)?|claude(?:\s+code)?|anthropic(?:\s+claude)?|openai|github\s+copilot|copilot|gemini)|(?:ai|llm)[-\s]*generated|(?:chatgpt|gpt-?\d(?:[.\w-]*)?|claude(?:\s+code)?|anthropic\s+claude|github\s+copilot|copilot|gemini)\s+(?:generated|wrote|created|authored|made|produced)\b|co-?authored-by:\s*(?:claude|chatgpt|openai|anthropic|copilot|gemini)|(?:anthropic\s+claude|claude\s+code|chatgpt|gpt-?\d(?:[.\w-]*)?)\s*(?:\*\/)?\s*$)/i,
+    antiPattern: /(?:anti-?pattern|example|fixture|snapshot|golden|test\s+case|do\s+not|don't|dont|avoid|\bdocs?\b|readme|changelog|prompt|expected|should\s+(?:flag|match|skip|not\s+match)|eslint-disable|vibecheck-ignore)/i,
     messageTemplate: 'AI attribution comment found. Remove model provenance leakage from production code.',
   },
 ];
