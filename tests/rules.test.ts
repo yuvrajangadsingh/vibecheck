@@ -11,9 +11,9 @@ describe('rule definitions', () => {
     expect(unique.size).toBe(ids.length);
   });
 
-  it('should have 35 rules total', () => {
+  it('should have 36 rules total', () => {
     const total = allRules.length + allMultilineRules.length;
-    expect(total).toBe(35);
+    expect(total).toBe(36);
   });
 
   it('all rules should have required fields', () => {
@@ -210,6 +210,51 @@ describe('code quality rules', () => {
     lines.push('}');
     const findings = godFunc.detect(lines, 'test.ts');
     expect(findings.length).toBe(1);
+  });
+});
+
+describe('no-double-assertion rule', () => {
+  const rule = allRules.find(r => r.id === 'no-double-assertion')!;
+
+  it('exists with correct config', () => {
+    expect(rule).toBeDefined();
+    expect(rule.severity).toBe('warn');
+    expect(rule.category).toBe('code-quality');
+    expect(rule.languages).toEqual(['ts', 'tsx']);
+  });
+
+  it('detects as unknown as T', () => {
+    expect(rule.pattern.test('const user = value as unknown as User;')).toBe(true);
+  });
+
+  it('detects parenthesized (x as any) as T', () => {
+    expect(rule.pattern.test('const user = (x as any) as User;')).toBe(true);
+  });
+
+  it('detects as never as T', () => {
+    expect(rule.pattern.test('const response = data as never as Response;')).toBe(true);
+  });
+
+  it('detects as const as T', () => {
+    expect(rule.pattern.test('const config = raw as const as ReadonlyConfig;')).toBe(true);
+  });
+
+  it('skips single assertion', () => {
+    expect(rule.pattern.test('const user = value as User;')).toBe(false);
+  });
+
+  it('skips single as unknown', () => {
+    expect(rule.pattern.test('const value = data as unknown;')).toBe(false);
+  });
+
+  it('skips comments via antiPattern', () => {
+    const line = '// example: value as unknown as User';
+    expect(rule.antiPattern!.test(line)).toBe(true);
+  });
+
+  it('skips lines marked intentional via antiPattern', () => {
+    const line = 'const user = value as unknown as User; // intentional unsafe boundary';
+    expect(rule.antiPattern!.test(line)).toBe(true);
   });
 });
 
