@@ -598,4 +598,45 @@ describe('no-with-router rule', () => {
     const findings = rule.detect(lines, 'app.tsx');
     expect(findings.length).toBe(0);
   });
+
+  it('flags a multi-line named import that includes withRouter, followed by usage', () => {
+    const lines = [
+      'import {',
+      '  Link,',
+      '  withRouter,',
+      '  useParams,',
+      "} from 'react-router-dom';",
+      'export default withRouter(MyComponent);',
+    ];
+    const findings = rule.detect(lines, 'app.tsx');
+    expect(findings.length).toBe(1);
+    expect(findings[0].line).toBe(6);
+  });
+
+  it('does not flag property-access withRouter after a real import (MyModule.withRouter)', () => {
+    const lines = [
+      "import { withRouter } from 'react-router-dom';",
+      'MyModule.withRouter(X);',
+    ];
+    const findings = rule.detect(lines, 'app.tsx');
+    expect(findings.length).toBe(0);
+  });
+
+  it('does not flag Foo.withRouter() even without an explicit react-router import', () => {
+    const lines = [
+      'Foo.withRouter();',
+    ];
+    const findings = rule.detect(lines, 'app.tsx');
+    expect(findings.length).toBe(0);
+  });
+
+  it('flags CJS alias via colon: const { withRouter: withRR } = require(...)', () => {
+    const lines = [
+      "const { withRouter: withRR } = require('react-router-dom');",
+      'module.exports = withRR(MyComponent);',
+    ];
+    const findings = rule.detect(lines, 'app.js');
+    expect(findings.length).toBe(1);
+    expect(findings[0].line).toBe(2);
+  });
 });
