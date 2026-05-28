@@ -171,6 +171,34 @@ describe('no-vague-error rule', () => {
     const line = '// throw new Error("Failed")';
     expect(vague.antiPattern!.test(line)).toBe(true);
   });
+
+  it('matches bare reject inside Promise executor', () => {
+    expect(vague.pattern.test('new Promise((resolve, reject) => { reject("Failed") })')).toBe(true);
+  });
+
+  it('matches throw new Error("Oops")', () => {
+    expect(vague.pattern.test('throw new Error("Oops")')).toBe(true);
+  });
+
+  it('matches throw new Error("Whoops")', () => {
+    expect(vague.pattern.test('throw new Error("Whoops")')).toBe(true);
+  });
+
+  it('matches throw new Error("Server error") case-insensitively', () => {
+    expect(vague.pattern.test('throw new Error("Server error")')).toBe(true);
+  });
+
+  it('skips route.reject (framework method call, not promise reject)', () => {
+    expect(vague.pattern.test('route.reject("Failed")')).toBe(false);
+  });
+
+  it('skips this.reject (method call, not promise reject)', () => {
+    expect(vague.pattern.test('this.reject("Failed")')).toBe(false);
+  });
+
+  it('skips schema.reject (method call, not promise reject)', () => {
+    expect(vague.pattern.test('schema.reject("Failed")')).toBe(false);
+  });
 });
 
 describe('ai tell rules', () => {
