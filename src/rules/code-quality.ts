@@ -22,6 +22,17 @@ export const codeQualityRules: Rule[] = [
     pattern: /(?:\/\/|\/\*|\*|#)\s*(?:TODO|FIXME|HACK|XXX)\s*:?\s*(?:implement|add|fix|handle|replace|update|complete|finish|create|write|build|setup|configure|refactor)\b/i,
     messageTemplate: 'AI-generated placeholder TODO found. Implement or remove it.',
   },
+  {
+    id: 'no-ai-attribution',
+    name: 'No AI Attribution Comments',
+    description: 'AI attribution comments leak model provenance into repos and often violate internal policies.',
+    category: 'code-quality',
+    severity: 'warn',
+    languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs', 'py'],
+    pattern: /^\s*(?:\/\/|\/\*+|\*|#)\s*(?:(?:generated|created|written|authored|co-?authored|made|produced)\s+(?:by|with|using)\s+(?:chatgpt|gpt-?\d(?:[.\w-]*)?|claude(?:\s+code)?|anthropic(?:\s+claude)?|openai|copilot|gemini)|(?:ai|llm)[-\s]*generated|(?:chatgpt|gpt-?\d(?:[.\w-]*)?|claude(?:\s+code)?|anthropic\s+claude|copilot|gemini)\s+(?:generated|wrote|created|authored|made|produced)\b|co-?authored-by:\s*(?:claude|chatgpt|openai|anthropic|copilot|gemini)|(?:anthropic\s+claude|claude\s+code|chatgpt|gpt-?\d(?:[.\w-]*)?)\s*(?:\*\/)?\s*$)/i,
+    antiPattern: /(?:anti-?pattern|example|fixture|snapshot|golden|test\s+case|do\s+not|don't|dont|avoid|docs?|readme|changelog|prompt|expected|should\s+(?:flag|match|skip|not\s+match)|eslint-disable|vibecheck-ignore)/i,
+    messageTemplate: 'AI attribution comment found. Remove model provenance leakage from production code.',
+  },
 ];
 
 const CONTROL_FLOW_KEYWORDS = /^(if|else|for|while|do|switch|catch|finally|with|return|throw|new|delete|typeof|void|yield|await|class|try|import|export|from|as)$/;
