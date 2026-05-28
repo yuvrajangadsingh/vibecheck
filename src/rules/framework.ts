@@ -20,6 +20,6 @@ export const frameworkRules: Rule[] = [
     severity: 'error',
     languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'],
     pattern: /res\.(?:json|send|status\s*\([^)]*\)\s*\.(?:json|send))\s*\([^)]*(?:err|error)\.(?:message|stack|toString\(\))/,
-    messageTemplate: 'Error internals leaked to HTTP response. Return a generic error message instead.',
+    messageTemplate: 'Error internals leaked to HTTP response. Return a safe public error message or stable error code; log internals server-side.',
   },
 ];

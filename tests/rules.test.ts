@@ -11,9 +11,9 @@ describe('rule definitions', () => {
     expect(unique.size).toBe(ids.length);
   });
 
-  it('should have 35 rules total', () => {
+  it('should have 36 rules total', () => {
     const total = allRules.length + allMultilineRules.length;
-    expect(total).toBe(35);
+    expect(total).toBe(36);
   });
 
   it('all rules should have required fields', () => {
@@ -129,6 +129,47 @@ describe('error handling rules', () => {
     const line = 'fetch("/api").then(r => r.json()).catch(handleError);';
     // Pattern matches .then without .catch on same match, but antiPattern catches it
     expect(swallowed.antiPattern!.test(line)).toBe(true);
+  });
+});
+
+describe('no-vague-error rule', () => {
+  const vague = allRules.find(r => r.id === 'no-vague-error')!;
+
+  it('matches throw new Error with vague message', () => {
+    expect(vague.pattern.test('throw new Error("Something went wrong")')).toBe(true);
+  });
+
+  it('matches throw Error without new', () => {
+    expect(vague.pattern.test('throw Error(\'Failed\')')).toBe(true);
+  });
+
+  it('matches return Promise.reject with vague string', () => {
+    expect(vague.pattern.test('return Promise.reject("Unknown error")')).toBe(true);
+  });
+
+  it('matches reject(new Error(...)) with vague message', () => {
+    expect(vague.pattern.test('reject(new Error("Internal error"))')).toBe(true);
+  });
+
+  it('matches throw new ValidationError with vague message', () => {
+    expect(vague.pattern.test('throw new ValidationError("Error")')).toBe(true);
+  });
+
+  it('skips HTTP response error payloads (no-error-info-leak territory)', () => {
+    expect(vague.pattern.test('res.status(500).json({ error: "Internal error" })')).toBe(false);
+  });
+
+  it('skips throw with contextual error message', () => {
+    expect(vague.pattern.test('throw new Error("Failed to load user profile")')).toBe(false);
+  });
+
+  it('skips reject with contextual error message', () => {
+    expect(vague.pattern.test('reject(new Error("Payment capture failed for orderId"))')).toBe(false);
+  });
+
+  it('skips commented-out throw lines via antiPattern', () => {
+    const line = '// throw new Error("Failed")';
+    expect(vague.antiPattern!.test(line)).toBe(true);
   });
 });
 
