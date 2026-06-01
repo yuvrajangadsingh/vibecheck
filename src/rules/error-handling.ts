@@ -31,6 +31,17 @@ export const errorHandlingRules: Rule[] = [
     lineExclusions: /pattern:|new RegExp/,
     messageTemplate: 'Promise .then() without .catch() swallows errors.',
   },
+  {
+    id: 'no-vague-error',
+    name: 'No Vague Error Messages',
+    description: 'Vague error messages at creation/propagation surfaces make failures undebuggable.',
+    category: 'error-handling',
+    severity: 'warn',
+    languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'],
+    pattern: /\b(?:throw\s+(?:new\s+)?(?:[A-Za-z_$][\w$]*)?Error|(?:return\s+)?Promise\.reject|(?<![\w$.])reject)\s*\(\s*(?:new\s+(?:[A-Za-z_$][\w$]*)?Error\s*\(\s*)?(['"`])\s*(?:something\s+went\s+wrong|an\s+error\s+occurred|unknown\s+error|internal\s+error|server\s+error|error|failed|failure|request\s+failed|oops|whoops)\s*[.!]?\s*\1/i,
+    antiPattern: /^\s*(?:\/\/|\/\*|\*)|eslint-disable|vibecheck-ignore|\/\/\s*(?:safe|intentional|example|fixture|test)/i,
+    messageTemplate: 'Vague error message. Add context (what failed, why, identifying data) so callers and logs are debuggable.',
+  },
 ];
 
 export const errorHandlingMultilineRules: MultilineRule[] = [

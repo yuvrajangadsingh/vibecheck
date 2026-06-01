@@ -134,6 +134,75 @@ describe('error handling rules', () => {
   });
 });
 
+describe('no-vague-error rule', () => {
+  const vague = allRules.find(r => r.id === 'no-vague-error')!;
+
+  it('matches throw new Error with vague message', () => {
+    expect(vague.pattern.test('throw new Error("Something went wrong")')).toBe(true);
+  });
+
+  it('matches throw Error without new', () => {
+    expect(vague.pattern.test('throw Error(\'Failed\')')).toBe(true);
+  });
+
+  it('matches return Promise.reject with vague string', () => {
+    expect(vague.pattern.test('return Promise.reject("Unknown error")')).toBe(true);
+  });
+
+  it('matches reject(new Error(...)) with vague message', () => {
+    expect(vague.pattern.test('reject(new Error("Internal error"))')).toBe(true);
+  });
+
+  it('matches throw new ValidationError with vague message', () => {
+    expect(vague.pattern.test('throw new ValidationError("Error")')).toBe(true);
+  });
+
+  it('skips HTTP response error payloads (no-error-info-leak territory)', () => {
+    expect(vague.pattern.test('res.status(500).json({ error: "Internal error" })')).toBe(false);
+  });
+
+  it('skips throw with contextual error message', () => {
+    expect(vague.pattern.test('throw new Error("Failed to load user profile")')).toBe(false);
+  });
+
+  it('skips reject with contextual error message', () => {
+    expect(vague.pattern.test('reject(new Error("Payment capture failed for orderId"))')).toBe(false);
+  });
+
+  it('skips commented-out throw lines via antiPattern', () => {
+    const line = '// throw new Error("Failed")';
+    expect(vague.antiPattern!.test(line)).toBe(true);
+  });
+
+  it('matches bare reject inside Promise executor', () => {
+    expect(vague.pattern.test('new Promise((resolve, reject) => { reject("Failed") })')).toBe(true);
+  });
+
+  it('matches throw new Error("Oops")', () => {
+    expect(vague.pattern.test('throw new Error("Oops")')).toBe(true);
+  });
+
+  it('matches throw new Error("Whoops")', () => {
+    expect(vague.pattern.test('throw new Error("Whoops")')).toBe(true);
+  });
+
+  it('matches throw new Error("Server error") case-insensitively', () => {
+    expect(vague.pattern.test('throw new Error("Server error")')).toBe(true);
+  });
+
+  it('skips route.reject (framework method call, not promise reject)', () => {
+    expect(vague.pattern.test('route.reject("Failed")')).toBe(false);
+  });
+
+  it('skips this.reject (method call, not promise reject)', () => {
+    expect(vague.pattern.test('this.reject("Failed")')).toBe(false);
+  });
+
+  it('skips schema.reject (method call, not promise reject)', () => {
+    expect(vague.pattern.test('schema.reject("Failed")')).toBe(false);
+  });
+});
+
 describe('ai tell rules', () => {
   const obvious = allRules.find(r => r.id === 'no-obvious-comments')!;
   const tsAny = allRules.find(r => r.id === 'no-ts-any')!;
