@@ -272,6 +272,10 @@ vibecheck uses regex pattern matching to scan your JS/TS/Python files. No AST pa
 
 It skips `node_modules`, `dist`, `build`, `__pycache__`, `.venv`, lockfiles, and minified code by default.
 
+If vibecheck saved you a review cycle, consider [starring the repo](https://github.com/yuvrajangadsingh/vibecheck).
+
+Built by [Yuvraj Angad Singh](https://yuvrajangadsingh.com). Also: [brandmd](https://github.com/yuvrajangadsingh/brandmd) (extract any site's design system for AI coding agents) and [vemb](https://github.com/yuvrajangadsingh/vemb) (embeddings from the command line). [Follow on GitHub](https://github.com/yuvrajangadsingh) for new dev-tool experiments.
+
 ## License
 
 [FSL-1.1-Apache-2.0](LICENSE)

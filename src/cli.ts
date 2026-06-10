@@ -114,6 +114,9 @@ const program = new Command()
       const modeLabel = options.staged ? ' (staged)' : options.diff ? ' (diff)' : '';
       console.log(`\n  vibecheck v${VERSION}${modeLabel}\n`);
       console.log(formatPretty(result, minSeverity));
+      if (process.stderr.isTTY) {
+        process.stderr.write('  ★ If this saved you a review cycle, star the repo: https://github.com/yuvrajangadsingh/vibecheck\n\n');
+      }
     }
 
     // Exit code: 1 if errors found

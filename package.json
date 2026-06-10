@@ -30,7 +30,7 @@
     "mcp",
     "model-context-protocol"
   ],
-  "author": "Yuvraj Angad Singh",
+  "author": "Yuvraj Angad Singh <yuvrajangad.s@gmail.com> (https://yuvrajangadsingh.com)",
   "license": "FSL-1.1-Apache-2.0",
   "publishConfig": {
     "access": "public"
@@ -39,6 +39,11 @@
     "type": "git",
     "url": "git+https://github.com/yuvrajangadsingh/vibecheck.git"
   },
+  "homepage": "https://github.com/yuvrajangadsingh/vibecheck#readme",
+  "bugs": {
+    "url": "https://github.com/yuvrajangadsingh/vibecheck/issues"
+  },
+  "funding": "https://github.com/sponsors/yuvrajangadsingh",
   "engines": {
     "node": ">=18"
   },
