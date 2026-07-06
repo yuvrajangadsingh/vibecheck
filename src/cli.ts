@@ -3,6 +3,7 @@ import { resolve, relative, dirname } from 'node:path';
 import { existsSync, statSync } from 'node:fs';
 import { loadConfig } from './config.js';
 import { scan } from './scanner.js';
+import { applyFixes } from './fixer.js';
 import { formatPretty, formatJSON, formatQuiet } from './formatter.js';
 import { getGitDiff, getGitRoot, resolveDiffPaths } from './diff.js';
 import type { Severity } from './types.js';
@@ -10,7 +11,7 @@ import type { DiffMap } from './diff.js';
 
 const VALID_SEVERITIES: Severity[] = ['error', 'warn', 'info'];
 
-const VERSION = '1.8.0';
+const VERSION = '1.10.0';
 
 const program = new Command()
   .name('vibecheck')
@@ -24,6 +25,7 @@ const program = new Command()
   .option('-q, --quiet', 'Only show summary')
   .option('-d, --diff', 'Only scan lines changed in git diff (unstaged)')
   .option('--staged', 'Only scan lines changed in git diff --cached (staged)')
+  .option('--fix', 'Automatically remove fixable findings (AI attribution comments)')
   .option('--mcp', 'Start MCP server (stdio transport) for AI agent integration')
   .action(async (targetPath: string, options: {
     config?: string;
@@ -33,6 +35,7 @@ const program = new Command()
     quiet?: boolean;
     diff?: boolean;
     staged?: boolean;
+    fix?: boolean;
     mcp?: boolean;
   }) => {
     if (options.mcp) {
@@ -100,6 +103,20 @@ const program = new Command()
       process.exit(2);
     }
 
+    // Apply fixes, then re-scan so remaining findings report accurate line numbers
+    let fixNote = '';
+    if (options.fix && result.findings.length > 0) {
+      const fixResult = applyFixes(result.findings, scanRoot);
+      if (fixResult.linesRemoved > 0) {
+        fixNote = `  ✔ fixed ${fixResult.linesRemoved} finding${fixResult.linesRemoved === 1 ? '' : 's'} in ${fixResult.filesModified} file${fixResult.filesModified === 1 ? '' : 's'} (removed AI attribution comments)\n`;
+        try {
+          result = await scan(scanRoot, config, diffMap);
+        } catch {
+          // keep pre-rescan result if the second pass fails
+        }
+      }
+    }
+
     // Output
     const severityInput = options.severity || 'warn';
     const minSeverity: Severity = VALID_SEVERITIES.includes(severityInput as Severity)
@@ -109,10 +126,12 @@ const program = new Command()
     if (options.json) {
       console.log(formatJSON(result, minSeverity));
     } else if (options.quiet) {
+      if (fixNote) console.log(fixNote);
       console.log(formatQuiet(result, minSeverity));
     } else {
       const modeLabel = options.staged ? ' (staged)' : options.diff ? ' (diff)' : '';
       console.log(`\n  vibecheck v${VERSION}${modeLabel}\n`);
+      if (fixNote) console.log(fixNote);
       console.log(formatPretty(result, minSeverity));
       if (process.stderr.isTTY) {
         process.stderr.write('  ★ If this saved you a review cycle, star the repo: https://github.com/yuvrajangadsingh/vibecheck\n\n');

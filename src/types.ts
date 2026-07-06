@@ -13,6 +13,7 @@ export type Rule = {
   lineExclusions?: RegExp;
   messageTemplate: string;
   multiline?: boolean;
+  fix?: 'remove-line';
 };
 
 export type MultilineRule = {
