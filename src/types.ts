@@ -11,6 +11,8 @@ export type Rule = {
   pattern: RegExp;
   antiPattern?: RegExp;
   lineExclusions?: RegExp;
+  /** Matched against the file path; when it matches, the rule is skipped for that file. */
+  fileExclusions?: RegExp;
   messageTemplate: string;
   multiline?: boolean;
   fix?: 'remove-line';

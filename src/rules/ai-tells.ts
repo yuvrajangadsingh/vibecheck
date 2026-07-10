@@ -42,7 +42,8 @@ export const aiTellRules: Rule[] = [
     severity: 'info',
     languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs', 'py'],
     pattern: /(?:\/\/|#)\s*(?:step\s+\d+\s*[:.-])/i,
-    antiPattern: /eslint-disable|noqa|README|\.md$/,
+    antiPattern: /eslint-disable|noqa|README/i,
+    fileExclusions: /\.mdx?$/,
     messageTemplate: 'Numbered step comment. Let the code speak for itself.',
   },
   {

@@ -6,7 +6,10 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { scan, scanContent, loadConfig, allRules, allMultilineRules, parseDiff } from './index.js';
 import type { Finding } from './types.js';
 
-const VERSION = '1.8.0';
+// Injected from package.json at build time by tsup `define` (single source of truth).
+declare const __VERSION__: string;
+const VERSION = typeof __VERSION__ !== 'undefined' ? __VERSION__ : '0.0.0-dev';
+const RULE_COUNT = allRules.length + allMultilineRules.length;
 
 function formatFindings(findings: Finding[]): string {
   if (findings.length === 0) return 'No issues found.';
@@ -80,7 +83,7 @@ export async function startMcpServer() {
 
   server.tool(
     'scan-files',
-    'Scan files or directories for AI-generated code smells (35 rules: security, error handling, code quality, AI tells, framework). Returns findings with file, line, severity, and message.',
+    `Scan files or directories for AI-generated code smells (${RULE_COUNT} rules: security, error handling, code quality, AI tells, framework). Returns findings with file, line, severity, and message.`,
     {
       paths: z.array(z.string()).describe('Absolute file or directory paths to scan'),
       config_path: z.string().optional().describe('Path to vibecheck config file'),
@@ -104,9 +107,3 @@ export async function startMcpServer() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
-
-// Auto-start when run directly (node dist/mcp.js)
-startMcpServer().catch((err) => {
-  console.error('MCP server error:', err.message);
-  process.exit(1);
-});

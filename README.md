@@ -17,9 +17,9 @@ npx @yuvrajangadsingh/vibecheck .
     89:1    warn   no-console-pollution   console.log left in production code.
 
   src/utils/db.ts
-    34:5    error  no-sql-concat          SQL query built with string concatenation.
+    34:5    warn   no-sql-concat          SQL query built with string concatenation.
 
-  4 problems (3 errors, 1 warning)
+  4 problems (2 errors, 2 warnings)
   2 files with issues out of 47 scanned (0.8s)
 ```
 
@@ -53,10 +53,10 @@ Standalone binaries (built with [Bun](https://bun.sh)) available for macOS (arm6
 |------|----------|----------------|
 | `no-hardcoded-secrets` | error | API keys, tokens, passwords in source code |
 | `no-eval` | error | `eval()` and `new Function()` calls |
-| `no-sql-concat` | error | SQL queries built with string concatenation |
+| `no-sql-concat` | warn | SQL queries built with string concatenation |
 | `no-innerhtml` | warn | `innerHTML` and `dangerouslySetInnerHTML` usage |
 | `no-py-eval` | error | `eval()`, `exec()`, `os.system()`, `subprocess(shell=True)` |
-| `no-py-sql-concat` | error | SQL queries built with f-strings or `.format()` |
+| `no-py-sql-concat` | warn | SQL queries built with f-strings or `.format()` |
 
 ### Error Handling
 | Rule | Severity | What it detects |

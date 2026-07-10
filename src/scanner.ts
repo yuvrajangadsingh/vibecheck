@@ -9,7 +9,10 @@ const MAX_FILE_SIZE = 1_000_000; // 1MB
 const VALID_SEVERITIES: Severity[] = ['error', 'warn', 'info'];
 
 function getLanguage(filePath: string): string {
-  return extname(filePath).slice(1);
+  const ext = extname(filePath).slice(1).toLowerCase();
+  // .mts/.cts are TypeScript; map them so the ts rules actually run on them.
+  if (ext === 'mts' || ext === 'cts') return 'ts';
+  return ext;
 }
 
 function resolveSeverity(configValue: string | undefined, fallback: Severity): Severity {
@@ -20,15 +23,24 @@ function resolveSeverity(configValue: string | undefined, fallback: Severity): S
 }
 
 /**
- * Scan a single file's content directly (for editor integrations).
+ * Scan a single file's content directly (used by the CLI, the MCP server, and
+ * editor integrations). The directory scanner delegates to this per file.
  */
 export function scanContent(content: string, filePath: string, config: Config): Finding[] {
   const lang = getLanguage(filePath);
   const lines = content.split('\n');
   const findings: Finding[] = [];
 
-  const activeRules = allRules.filter((r) => config.rules[r.id] !== 'off' && r.languages.includes(lang));
-  const activeMultilineRules = allMultilineRules.filter((r) => config.rules[r.id] !== 'off' && r.languages.includes(lang));
+  const enabled = (id: string) => config.rules[id] !== 'off';
+  const forThisFile = (r: { fileExclusions?: RegExp }) =>
+    !(r.fileExclusions && r.fileExclusions.test(filePath));
+
+  const activeRules = allRules.filter(
+    (r) => enabled(r.id) && r.languages.includes(lang) && forThisFile(r),
+  );
+  const activeMultilineRules = allMultilineRules.filter(
+    (r) => enabled(r.id) && r.languages.includes(lang),
+  );
 
   for (const rule of activeRules) {
     const severity = resolveSeverity(config.rules[rule.id], rule.severity);
@@ -74,9 +86,6 @@ export async function scan(targetPath: string, config: Config, diffMap?: DiffMap
     followSymbolicLinks: false,
   });
 
-  const activeRules = allRules.filter((rule) => config.rules[rule.id] !== 'off');
-  const activeMultilineRules = allMultilineRules.filter((rule) => config.rules[rule.id] !== 'off');
-
   let scannedCount = 0;
 
   for (const filePath of files) {
@@ -106,64 +115,10 @@ export async function scan(targetPath: string, config: Config, diffMap?: DiffMap
 
     scannedCount++;
 
-    const lang = getLanguage(filePath);
-    const lines = content.split('\n');
-
-    // Filter rules by language once per file
-    const rulesForFile = activeRules.filter((r) => r.languages.includes(lang));
-    const multilineRulesForFile = activeMultilineRules.filter((r) => r.languages.includes(lang));
-
-    // Line-by-line rules
-    for (const rule of rulesForFile) {
-      const severity = resolveSeverity(config.rules[rule.id], rule.severity);
-
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        const match = rule.pattern.exec(line);
-        if (!match) continue;
-
-        // Check anti-pattern (false positive reduction)
-        if (rule.antiPattern && rule.antiPattern.test(line)) continue;
-
-        // Check line exclusions
-        if (rule.lineExclusions && rule.lineExclusions.test(line)) continue;
-
-        // In diff mode, skip findings not on changed lines
-        if (changedLines && !changedLines.has(i + 1)) continue;
-
-        findings.push({
-          rule: rule.id,
-          severity,
-          category: rule.category,
-          file: relPath,
-          line: i + 1,
-          column: match.index + 1,
-          message: rule.messageTemplate,
-          snippet: line.trim(),
-        });
-      }
-    }
-
-    // Multiline rules
-    for (const rule of multilineRulesForFile) {
-      const severity = resolveSeverity(config.rules[rule.id], rule.severity);
-
-      const multiFindings = rule.detect(lines, filePath);
-      for (const mf of multiFindings) {
-        // In diff mode, skip findings not on changed lines
-        if (changedLines && !changedLines.has(mf.line)) continue;
-
-        findings.push({
-          rule: rule.id,
-          severity,
-          category: rule.category,
-          file: relPath,
-          line: mf.line,
-          column: mf.column,
-          message: mf.message,
-          snippet: mf.snippet.trim(),
-        });
-      }
+    for (const f of scanContent(content, relPath, config)) {
+      // In diff mode, keep only findings on changed lines
+      if (changedLines && !changedLines.has(f.line)) continue;
+      findings.push(f);
     }
   }
 

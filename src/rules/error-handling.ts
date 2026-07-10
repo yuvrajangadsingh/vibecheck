@@ -85,11 +85,18 @@ export const errorHandlingMultilineRules: MultilineRule[] = [
         let hasTodoComment = false;
 
         for (let j = i + 1; j < lines.length && depth > 0; j++) {
+          const trimmed = lines[j].trim();
+          // Break only when this line closes the catch itself (depth 1 -> 0). A
+          // trailing `finally {` / `else {` on that line belongs to the
+          // surrounding statement (fixes the empty-catch-before-finally FN),
+          // while a `}` that closes a nested block opened on the catch line
+          // (depth > 1) must not be mistaken for the catch's end (avoids a FP).
+          if (depth === 1 && /^\}/.test(trimmed)) break;
+
           const prevDepth = depth;
           depth = trackBraceDepth(lines[j], depth);
 
           if (prevDepth > 0) {
-            const trimmed = lines[j].trim();
             if (trimmed === '' || trimmed === '}') continue;
             if (/^\/\/\s*(todo|fixme|ignore|suppress)/i.test(trimmed)) {
               hasTodoComment = true;

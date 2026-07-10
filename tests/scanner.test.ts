@@ -38,12 +38,15 @@ describe('scanner', () => {
     expect(consoleFindings.length).toBe(0);
   });
 
-  it('security findings have error severity', async () => {
+  it('hard security rules have error severity', async () => {
     const config = loadConfig();
     const result = await scan(FIXTURES_DIR, config);
 
+    // no-innerhtml and the SQL-concat rules are deliberately warn: they are regex
+    // heuristics that can false-positive, so they surface without failing CI.
+    const heuristic = new Set(['no-innerhtml', 'no-sql-concat', 'no-py-sql-concat']);
     const securityErrors = result.findings.filter(
-      f => f.category === 'security' && f.rule !== 'no-innerhtml'
+      f => f.category === 'security' && !heuristic.has(f.rule)
     );
     for (const f of securityErrors) {
       expect(f.severity).toBe('error');

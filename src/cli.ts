@@ -11,7 +11,10 @@ import type { DiffMap } from './diff.js';
 
 const VALID_SEVERITIES: Severity[] = ['error', 'warn', 'info'];
 
-const VERSION = '1.10.0';
+// Injected from package.json at build time by tsup `define` (single source of truth).
+// The typeof guard keeps it working under vitest, where the define is not applied.
+declare const __VERSION__: string;
+const VERSION = typeof __VERSION__ !== 'undefined' ? __VERSION__ : '0.0.0-dev';
 
 const program = new Command()
   .name('vibecheck')

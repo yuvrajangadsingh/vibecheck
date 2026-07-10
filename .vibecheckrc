@@ -1,1 +1,1 @@
-{ "ignore": ["demo-slop.ts", "demo.tape"] }
+{ "ignore": ["demo-slop.ts", "demo.tape", "tests/**"] }

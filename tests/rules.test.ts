@@ -70,6 +70,39 @@ describe('security rules', () => {
   it('detects SQL string concat after closing quote', () => {
     expect(sqlRule.pattern.test("const q = 'SELECT * FROM users WHERE id = ' + userId;")).toBe(true);
   });
+
+  it('does not flag Playwright page.$eval but does flag window.eval (FP fix + qualified-eval FN)', () => {
+    expect(evalRule.pattern.test("await page.$eval('#sel', el => el.textContent)")).toBe(false);
+    expect(evalRule.pattern.test('eval(userInput)')).toBe(true);
+    expect(evalRule.pattern.test('window.eval(userInput)')).toBe(true);
+    expect(evalRule.pattern.test('self.eval(userInput)')).toBe(true);
+  });
+
+  it('flags innerHTML assignment incl. logical-assign, not equality (FP/FN fix)', () => {
+    expect(htmlRule.pattern.test('if (el.innerHTML === cached) return;')).toBe(false);
+    expect(htmlRule.pattern.test('el.innerHTML += userInput')).toBe(true);
+    expect(htmlRule.pattern.test('el.innerHTML ||= userInput')).toBe(true);
+    expect(htmlRule.pattern.test('el.innerHTML &&= userInput')).toBe(true);
+    expect(htmlRule.pattern.test('el.innerHTML ??= userInput')).toBe(true);
+  });
+
+  it('flags a hardcoded secret on a very long line (no global line-length skip)', () => {
+    const content = 'const filler = "' + 'a'.repeat(2100) + '"; const apiKey = "sk-live-0123456789abcdef0123";\n';
+    const findings = scanContent(content, 'test.ts', loadConfig());
+    expect(findings.some(f => f.rule === 'no-hardcoded-secrets')).toBe(true);
+  });
+
+  it('does not flag plain UI strings that start with a SQL keyword (FP fix)', () => {
+    expect(sqlRule.pattern.test('const msg = "Update available: " + version;')).toBe(false);
+    expect(sqlRule.pattern.test('toast(`Delete ${count} items?`)')).toBe(false);
+  });
+
+  it('flags config-assigned secrets that the env antiPattern used to swallow (FN fix)', () => {
+    const config = loadConfig();
+    const content = 'config.apiKey = "sk-live-0123456789abcdef0123";\n';
+    const findings = scanContent(content, 'test.ts', config).filter(f => f.rule === 'no-hardcoded-secrets');
+    expect(findings.length).toBe(1);
+  });
 });
 
 describe('error handling rules', () => {
@@ -119,6 +152,18 @@ describe('error handling rules', () => {
     const lines = ['try {', '  doSomething();', '} catch (e) {', '', '', '}'];
     const findings = emptyCatch.detect(lines, 'test.ts');
     expect(findings.length).toBe(1);
+  });
+
+  it('detects empty catch followed by finally (FN fix)', () => {
+    const lines = ['try {', '  risky();', '} catch (e) {', '} finally {', '  cleanup();', '}'];
+    const findings = emptyCatch.detect(lines, 'test.ts');
+    expect(findings.length).toBe(1);
+  });
+
+  it('does not flag a catch that handles via a nested block opened on the catch line', () => {
+    const lines = ['} catch (e) { if (retryable) {', '  } else {', '    reportFatal(e);', '  }', '}'];
+    const findings = emptyCatch.detect(lines, 'test.ts');
+    expect(findings.length).toBe(0);
   });
 
   it('detects single-line console-only catch', () => {
@@ -467,9 +512,22 @@ describe('python rules', () => {
     expect(pyEval.antiPattern!.test('ast.literal_eval(data)')).toBe(true);
   });
 
+  it('does not flag ML .eval() but does flag builtins.eval (FP fix + qualified-eval FN)', () => {
+    expect(pyEval.pattern.test('model.eval()')).toBe(false);
+    expect(pyEval.pattern.test('df.eval("a > 1")')).toBe(false);
+    expect(pyEval.pattern.test('result = eval(user_input)')).toBe(true);
+    expect(pyEval.pattern.test('builtins.eval(user_input)')).toBe(true);
+    expect(pyEval.pattern.test('__builtins__.exec(code)')).toBe(true);
+  });
+
   it('detects f-string SQL', () => {
     expect(pySql.pattern.test('f"SELECT * FROM users WHERE id = {user_id}"')).toBe(true);
     expect(pySql.pattern.test('"DELETE FROM logs WHERE date = \'{}\'".format(date_str)')).toBe(true);
+  });
+
+  it('does not flag plain f-strings that start with a SQL keyword (FP fix)', () => {
+    expect(pySql.pattern.test('f"Update {n} rows"')).toBe(false);
+    expect(pySql.pattern.test('f"Selected {count} files"')).toBe(false);
   });
 
   it('detects bare except', () => {
@@ -487,8 +545,20 @@ describe('python rules', () => {
     expect(starImport.pattern.test('from django.db.models import *')).toBe(true);
   });
 
+  it('detects indented star imports (FN fix)', () => {
+    expect(starImport.pattern.test('    from .models import *')).toBe(true);
+  });
+
   it('skips specific imports', () => {
     expect(starImport.pattern.test('from os import path, getcwd')).toBe(false);
+  });
+
+  it('detects raise NotImplementedError without parens, not in comments/docstrings (FN + FP fix)', () => {
+    const stub = allRules.find(r => r.id === 'no-py-stub-function')!;
+    expect(stub.pattern.test('    raise NotImplementedError')).toBe(true);
+    expect(stub.pattern.test('    raise NotImplementedError("todo")')).toBe(true);
+    expect(stub.pattern.test('# raise NotImplementedError in subclasses')).toBe(false);
+    expect(stub.pattern.test('"""raise NotImplementedError in subclasses"""')).toBe(false);
   });
 
   it('detects mutable default arguments', () => {
@@ -860,5 +930,27 @@ describe('no-with-router rule', () => {
     ];
     const findings = rule.detect(lines, 'app.tsx');
     expect(findings.length).toBe(0);
+  });
+});
+
+describe('file exclusions', () => {
+  const config = loadConfig();
+
+  it('skips console.log in test files, flags it in source files', () => {
+    const content = 'console.log("debug");\n';
+    expect(scanContent(content, 'src/app.test.ts', config).some(f => f.rule === 'no-console-pollution')).toBe(false);
+    expect(scanContent(content, 'src/app.ts', config).some(f => f.rule === 'no-console-pollution')).toBe(true);
+  });
+
+  it('skips print() in python test files, flags it in source files', () => {
+    const content = 'print("hello")\n';
+    expect(scanContent(content, 'tests/test_app.py', config).some(f => f.rule === 'no-py-print')).toBe(false);
+    expect(scanContent(content, 'app.py', config).some(f => f.rule === 'no-py-print')).toBe(true);
+  });
+
+  it('runs ts rules on .mts and .cts files', () => {
+    const content = 'const x = data as any;\n';
+    expect(scanContent(content, 'mod.mts', config).some(f => f.rule === 'no-ts-any')).toBe(true);
+    expect(scanContent(content, 'mod.cts', config).some(f => f.rule === 'no-ts-any')).toBe(true);
   });
 });

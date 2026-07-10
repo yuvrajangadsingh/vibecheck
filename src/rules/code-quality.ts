@@ -9,7 +9,8 @@ export const codeQualityRules: Rule[] = [
     severity: 'warn',
     languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'],
     pattern: /console\.(log|debug|info)\s*\(/,
-    antiPattern: /eslint-disable|\/\/\s*keep|logger|debug\.(js|ts)|\.test\.|\.spec\.|__tests__/,
+    antiPattern: /eslint-disable|\/\/\s*keep|logger/,
+    fileExclusions: /(?:^|[/\\])debug\.[cm]?[jt]sx?$|\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|[/\\])__tests__[/\\]/,
     messageTemplate: 'console.log left in production code.',
   },
   {
@@ -107,10 +108,12 @@ export const codeQualityMultilineRules: MultilineRule[] = [
     messageTemplate: 'Function exceeds 80 lines. Break it into smaller functions.',
     detect(lines: string[]): MultilineFinding[] {
       const findings: MultilineFinding[] = [];
-      const funcPattern = /(?:(?:export\s+)?(?:async\s+)?function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>|(\w+)\s*(?::\s*\w[^=]*)?\s*\([^)]*\)\s*(?::\s*\w[^{]*)?\s*\{)/;
+      const funcPattern = /(?:(?:export\s+)?(?:async\s+)?function\s+(\w{1,64})|(?:const|let|var)\s+(\w{1,64})\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>|(\w{1,64})\s*(?::\s*\w[^=]*)?\s*\([^)]*\)\s*(?::\s*\w[^{]*)?\s*\{)/;
 
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
+        // Skip pathological long lines (minified/generated); funcPattern is quadratic on them.
+        if (line.length > 2000) continue;
         const match = funcPattern.exec(line);
         if (!match) continue;
 

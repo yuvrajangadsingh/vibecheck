@@ -1,11 +1,11 @@
 {
   "name": "@yuvrajangadsingh/vibecheck",
-  "version": "1.10.0",
-  "description": "ESLint for AI slop. 35 rules for catching AI-generated code smells in JS/TS and Python.",
+  "version": "1.11.0",
+  "description": "ESLint for AI slop. 39 rules for catching AI-generated code smells in JS/TS and Python.",
   "type": "module",
   "bin": {
     "vibecheck": "./dist/cli.js",
-    "vibecheck-mcp": "./dist/mcp.js"
+    "vibecheck-mcp": "./dist/mcp-bin.js"
   },
   "main": "./dist/index.js",
   "files": [
@@ -21,11 +21,22 @@
   },
   "keywords": [
     "linter",
+    "lint",
+    "eslint",
+    "static-analysis",
+    "code-review",
     "ai",
+    "ai-generated-code",
     "slop",
+    "ai-slop",
     "vibe-coding",
     "code-quality",
     "security",
+    "typescript",
+    "javascript",
+    "python",
+    "copilot",
+    "cursor",
     "cli",
     "mcp",
     "model-context-protocol"
