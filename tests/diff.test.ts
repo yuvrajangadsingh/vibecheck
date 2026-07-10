@@ -135,6 +135,40 @@ diff --git a/src/b.ts b/src/b.ts
     expect(result.has('src/tab\tname.ts')).toBe(true);
   });
 
+  it('handles CRLF diffs (trailing \\r stripped from paths and hunks)', () => {
+    const lf = `diff --git a/leak.ts b/leak.ts
+--- a/leak.ts
++++ b/leak.ts
+@@ -1 +1 @@
++const key = "x";
+`;
+    const result = parseDiff(lf.replace(/\n/g, '\r\n'));
+    expect(result.has('leak.ts')).toBe(true);
+    expect(result.get('leak.ts')!.has(1)).toBe(true);
+  });
+
+  it('handles quoted filenames with escaped double quotes', () => {
+    const diff = `diff --git "a/quo\\"te.ts" "b/quo\\"te.ts"
+--- "a/quo\\"te.ts"
++++ "b/quo\\"te.ts"
+@@ -1 +1 @@
++const z = 3;`;
+
+    const result = parseDiff(diff);
+    expect(result.has('quo"te.ts')).toBe(true);
+  });
+
+  it('handles git octal-escaped non-ASCII filenames', () => {
+    const diff = `diff --git "a/caf\\303\\251.ts" "b/caf\\303\\251.ts"
+--- "a/caf\\303\\251.ts"
++++ "b/caf\\303\\251.ts"
+@@ -1 +1 @@
++const q = 4;`;
+
+    const result = parseDiff(diff);
+    expect(result.has('café.ts')).toBe(true);
+  });
+
   it('resets currentFile on new diff block', () => {
     // If second file header is unparseable, lines should not leak to first file
     const diff = `diff --git a/src/a.ts b/src/a.ts

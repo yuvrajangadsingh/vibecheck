@@ -111,20 +111,40 @@ Standalone binaries (built with [Bun](https://bun.sh)) available for macOS (arm6
 
 ```
 vibecheck [path] [options]
+vibecheck rules [--json]
 
 Options:
   -c, --config <file>     Path to config file
   -d, --diff              Only scan lines changed in git diff (unstaged)
   --staged                Only scan lines changed in git diff --cached (staged)
+  --diff-stdin            Only scan lines changed in a unified diff read from stdin
   --fix                   Auto-remove fixable findings (AI attribution comments)
-  --json                  Output as JSON (for CI pipelines)
+  --format <format>       Output format: pretty, compact, json, quiet, gh (default: pretty)
+  --json                  Output as JSON (alias for --format json)
   --ignore <patterns...>  Additional ignore patterns
-  --severity <level>      Minimum severity: error, warn, info (default: warn)
-  -q, --quiet             Only show summary
+  --severity <level>      Minimum severity to report: error, warn, info (default: warn)
+  --fail-on <level>       Exit 1 at this severity: error, warn, info, never (default: error)
+  --max-warnings <n>      Exit 1 when more than n warnings are reported
+  --statistics            Append per-rule finding counts (pretty and json output)
+  -q, --quiet             Only show summary (alias for --format quiet)
   --mcp                   Start MCP server (stdio transport)
   -v, --version           Show version
   -h, --help              Show help
 ```
+
+`--format compact` prints one `path:line:col  severity  rule  message` line per finding (cmd-clickable in most editors). `--format gh` emits [GitHub Actions workflow commands](#ci-without-the-action) so findings show up as PR annotations.
+
+`vibecheck rules` lists every rule with its severity, category, languages, and whether `--fix` can fix it. `vibecheck rules --json` emits the same list as JSON.
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Clean, or no findings at or above `--fail-on` |
+| 1 | Findings at or above `--fail-on`, or `--max-warnings` exceeded |
+| 2 | Usage or runtime error (invalid flag, bad path) |
+
+`--fail-on` and `--max-warnings` count reported findings only: anything hidden by `--severity` never fails the run. `--fail-on never` always exits 0 on a successful scan.
 
 ## Auto-fix
 
@@ -146,9 +166,14 @@ vibecheck --diff .
 # Scan staged changes (pre-commit hook)
 vibecheck --staged .
 
+# Scan a diff from anywhere (PRs, other branches)
+gh pr diff 42 | vibecheck --diff-stdin .
+
 # CI-friendly output
 vibecheck --staged --json .
 ```
+
+Paths inside a piped diff are treated as repo-root-relative (what `git diff` and `gh pr diff` emit) and resolved against the scan path, so scanning a subdirectory works. Outside a git repository they are taken relative to the scan path.
 
 ### Pre-commit hook
 
@@ -208,7 +233,15 @@ The action automatically scans only files changed in the PR. On push events, it 
 
 Available on the [GitHub Marketplace](https://github.com/marketplace/actions/vibecheck-ai-slop). See it in action on the [demo repo](https://github.com/yuvrajangadsingh/vibecheck-demo).
 
-### Manual CI
+### CI without the Action
+
+`--format gh` emits GitHub Actions workflow commands, so findings show up as inline PR annotations from a plain run step:
+
+```yaml
+- run: npx @yuvrajangadsingh/vibecheck . --format gh --fail-on warn
+```
+
+Or keep machine-readable output for other pipelines:
 
 ```bash
 npx @yuvrajangadsingh/vibecheck . --json > vibecheck.json

@@ -4,21 +4,55 @@ import { resolve, relative, sep } from 'node:path';
 export type DiffMap = Map<string, Set<number>>;
 
 /**
+ * Unescape a git C-style quoted path body: \t \n \r \" \\ and octal byte
+ * escapes like \303\251, which git uses for non-ASCII filenames (the bytes
+ * are collected and decoded as UTF-8 at the end).
+ */
+function unquoteGitPath(quoted: string): string {
+  const bytes: number[] = [];
+  const push = (s: string) => {
+    for (const b of Buffer.from(s, 'utf-8')) bytes.push(b);
+  };
+  for (let i = 0; i < quoted.length; i++) {
+    const ch = quoted[i];
+    if (ch !== '\\') {
+      push(ch);
+      continue;
+    }
+    const next = quoted[i + 1];
+    if (next === undefined) break;
+    if (next >= '0' && next <= '7') {
+      let oct = '';
+      let j = i + 1;
+      while (j < quoted.length && oct.length < 3 && quoted[j] >= '0' && quoted[j] <= '7') {
+        oct += quoted[j];
+        j++;
+      }
+      bytes.push(parseInt(oct, 8));
+      i = j - 1;
+    } else {
+      const map: Record<string, string> = { t: '\t', n: '\n', r: '\r', '"': '"', '\\': '\\' };
+      push(map[next] ?? next);
+      i++;
+    }
+  }
+  return Buffer.from(bytes).toString('utf-8');
+}
+
+/**
  * Extract file path from a +++ or --- header line.
- * Handles: +++ b/path, +++ "b/path with spaces", +++ b/path\twith\ttabs
+ * Handles: +++ b/path, +++ "b/path with spaces", +++ "b/caf\303\251.ts",
+ * +++ "b/quo\"te.ts", +++ b/path\twith\ttabs
  */
 function parseHeaderPath(line: string): string | null {
   // Strip the +++ or --- prefix
   const rest = line.slice(4);
 
   if (rest.startsWith('"')) {
-    // Quoted path: "b/src/space name.ts"
+    // Git C-style quoted path: "b/space name.ts", "b/caf\303\251.ts"
     const closing = rest.lastIndexOf('"');
     if (closing <= 0) return null;
-    const quoted = rest.slice(1, closing);
-    // Remove b/ prefix, unescape git's quoting
-    const unescaped = quoted.replace(/^[ab]\//, '').replace(/\\t/g, '\t').replace(/\\n/g, '\n').replace(/\\\\/g, '\\');
-    return unescaped;
+    return unquoteGitPath(rest.slice(1, closing)).replace(/^[ab]\//, '');
   }
 
   if (rest.startsWith('b/') || rest.startsWith('a/')) {
@@ -40,7 +74,10 @@ export function parseDiff(diffOutput: string): DiffMap {
   let currentFile: string | null = null;
   let lineNumber = 0;
 
-  for (const line of diffOutput.split('\n')) {
+  for (const rawLine of diffOutput.split('\n')) {
+    // CRLF diffs would otherwise leave a trailing \r on header paths, making
+    // every diffMap key miss at scan time (silent false-clean).
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
     // Reset currentFile on new diff block
     if (line.startsWith('diff ')) {
       currentFile = null;
