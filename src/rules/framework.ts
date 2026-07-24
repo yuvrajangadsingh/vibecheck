@@ -41,7 +41,8 @@ const importTailPattern = /^\s*from\s*['"]react-router(?:-dom)?['"]\s*;?/;
 const requireTailPattern = /^\s*=\s*require\s*\(\s*['"]react-router(?:-dom)?['"]\s*\)\s*;?/;
 
 const bindingPattern = /\bwithRouter\b(?:\s*(?:as|:)\s*([A-Za-z_$][\w$]*))?/;
-const withRouterAntiPattern = /eslint-disable|vibecheck-ignore|\/\/\s*(?:legacy|intentional|react-router-v5|safe)/i;
+// vibecheck-ignore handling moved to the scanner-level suppression pre-pass (suppressions.ts)
+const withRouterAntiPattern = /eslint-disable|\/\/\s*(?:legacy|intentional|react-router-v5|safe)/i;
 
 type ImportHit = {
   bindingsStr: string;

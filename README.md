@@ -119,20 +119,22 @@ Options:
   --staged                Only scan lines changed in git diff --cached (staged)
   --diff-stdin            Only scan lines changed in a unified diff read from stdin
   --fix                   Auto-remove fixable findings (AI attribution comments)
-  --format <format>       Output format: pretty, compact, json, quiet, gh (default: pretty)
+  --format <format>       Output format: pretty, compact, json, quiet, gh, sarif (default: pretty)
   --json                  Output as JSON (alias for --format json)
   --ignore <patterns...>  Additional ignore patterns
   --severity <level>      Minimum severity to report: error, warn, info (default: warn)
   --fail-on <level>       Exit 1 at this severity: error, warn, info, never (default: error)
   --max-warnings <n>      Exit 1 when more than n warnings are reported
   --statistics            Append per-rule finding counts (pretty and json output)
+  --update-baseline       Record current findings in .vibecheck-baseline.json, then exit 0
+  --show-suppressed       List findings suppressed by inline directives (pretty and json)
   -q, --quiet             Only show summary (alias for --format quiet)
   --mcp                   Start MCP server (stdio transport)
   -v, --version           Show version
   -h, --help              Show help
 ```
 
-`--format compact` prints one `path:line:col  severity  rule  message` line per finding (cmd-clickable in most editors). `--format gh` emits [GitHub Actions workflow commands](#ci-without-the-action) so findings show up as PR annotations.
+`--format compact` prints one `path:line:col  severity  rule  message` line per finding (cmd-clickable in most editors). `--format gh` emits [GitHub Actions workflow commands](#ci-without-the-action) so findings show up as PR annotations. `--format sarif` emits [SARIF 2.1.0](#sarif--github-code-scanning) for the GitHub Security tab.
 
 `vibecheck rules` lists every rule with its severity, category, languages, and whether `--fix` can fix it. `vibecheck rules --json` emits the same list as JSON.
 
@@ -144,7 +146,7 @@ Options:
 | 1 | Findings at or above `--fail-on`, or `--max-warnings` exceeded |
 | 2 | Usage or runtime error (invalid flag, bad path) |
 
-`--fail-on` and `--max-warnings` count reported findings only: anything hidden by `--severity` never fails the run. `--fail-on never` always exits 0 on a successful scan.
+`--fail-on` and `--max-warnings` count reported findings only: anything hidden by `--severity` never fails the run. With a [baseline](#baseline) present, both gates count new findings only. `--fail-on never` always exits 0 on a successful scan.
 
 ## Auto-fix
 
@@ -205,6 +207,48 @@ Create `.vibecheckrc` in your project root:
 
 All rules are on by default at their recommended severity. Set any rule to `"off"` to disable it.
 
+## Inline suppressions
+
+Silence a finding where it happens instead of turning the rule off for the whole project:
+
+```ts
+// vibecheck-disable-next-line
+const html = element.innerHTML;
+
+// vibecheck-disable-next-line no-eval, no-ts-any
+const out = eval(expr) as any;
+
+const legacy = eval(expr); // vibecheck-disable-line
+
+// vibecheck-disable no-console-pollution
+```
+
+```python
+# vibecheck-disable-next-line no-py-print
+print("startup banner")
+```
+
+A bare directive suppresses every rule on its target; add comma-separated rule ids to scope it. `vibecheck-disable` (optionally with rule ids) covers the whole file. Append `-- reason` to document why: `// vibecheck-disable-next-line no-eval -- sandboxed input`. The old undocumented `vibecheck-ignore` marker still works as an alias for `vibecheck-disable-line`.
+
+Directives are parsed with a string-aware lexer, so directive text inside string literals, template literals, or regex literals never suppresses anything, and a directive must be the first token of its comment. Suppressions run inside the scanner, so the CLI, the GitHub Action, the MCP server, and the VS Code extension all honor them.
+
+In JSX files (`.tsx`/`.jsx`) use the expression-comment form, same as eslint: `{/* vibecheck-disable-next-line no-eval */}`. Bare `//` and `/* */` directives are ignored there, because rendered element text could otherwise forge them. A file-level `// vibecheck-disable` still works before the first `<` in the file.
+
+Suppressed findings stay visible: the summary reports how many were suppressed, and `--show-suppressed` lists them (JSON output gets `suppressedCount`, plus the full list with the flag). Suppression abuse can't hide silently.
+
+## Baseline
+
+Adopting a linter on an existing codebase usually means a wall of findings. A baseline records them so only new ones fail:
+
+```bash
+vibecheck --update-baseline .   # record current findings (commit the file)
+vibecheck .                     # 76 findings (76 baselined, 0 new) -> exit 0
+```
+
+`--update-baseline` writes `.vibecheck-baseline.json` in the working directory (found automatically on later scans, like `.vibecheckrc`). Exit codes, `--fail-on`, and `--max-warnings` then count new findings only, and the summary shows `N findings (M baselined, K new)`.
+
+Fingerprints are `sha1(rule|path|trimmed snippet)` with no line number, so baselined findings survive code moving around a file. Editing a flagged line changes its fingerprint and it comes back as new; re-run `--update-baseline` after intentional changes. All severities are recorded, so the baseline is independent of `--severity`. Run scans from the same directory you baselined from (fingerprints use scan-root-relative paths).
+
 ## VS Code Extension
 
 Get inline diagnostics (squigglies) right in your editor:
@@ -222,16 +266,33 @@ Features: inline error/warning/info markers, Problems panel integration, status 
 Add vibecheck to your CI with inline PR annotations:
 
 ```yaml
-- uses: yuvrajangadsingh/vibecheck@v1.2.0
+- uses: yuvrajangadsingh/vibecheck@v1.13.0
   with:
     severity: warn       # minimum severity to report (default: warn)
     fail-on: error       # fail the check at this severity (default: error)
     ignore: "tests/**"   # comma-separated ignore patterns
+    sarif: false         # upload to the Security tab (see below)
 ```
 
 The action automatically scans only files changed in the PR. On push events, it scans the full repo.
 
 Available on the [GitHub Marketplace](https://github.com/marketplace/actions/vibecheck-ai-slop). See it in action on the [demo repo](https://github.com/yuvrajangadsingh/vibecheck-demo).
+
+### SARIF / GitHub code scanning
+
+Set `sarif: true` and findings land in the repo's Security tab next to CodeQL, with stable fingerprints so alerts track across commits:
+
+```yaml
+permissions:
+  security-events: write
+steps:
+  - uses: actions/checkout@v4
+  - uses: yuvrajangadsingh/vibecheck@v1.13.0
+    with:
+      sarif: true
+```
+
+The action writes `vibecheck.sarif` and uploads it via `github/codeql-action/upload-sarif` (uploaded even when `fail-on` fails the check, so the Security tab stays current).
 
 ### CI without the Action
 
@@ -239,6 +300,15 @@ Available on the [GitHub Marketplace](https://github.com/marketplace/actions/vib
 
 ```yaml
 - run: npx @yuvrajangadsingh/vibecheck . --format gh --fail-on warn
+```
+
+Or upload SARIF to code scanning from a plain workflow:
+
+```yaml
+- run: npx @yuvrajangadsingh/vibecheck . --format sarif --fail-on never > vibecheck.sarif
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: vibecheck.sarif
 ```
 
 Or keep machine-readable output for other pipelines:

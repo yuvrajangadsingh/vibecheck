@@ -27,6 +27,10 @@ inputs:
     description: 'Only report on files changed in the PR (ignored for push events)'
     required: false
     default: 'true'
+  sarif:
+    description: 'Upload findings to GitHub code scanning as SARIF (requires the security-events: write permission)'
+    required: false
+    default: 'false'
   github-token:
     description: 'GitHub token for fetching PR changed files'
     required: false
@@ -41,6 +45,7 @@ runs:
         node-version: '20'
 
     - name: Run vibecheck
+      id: scan
       shell: bash
       env:
         INPUT_SEVERITY: ${{ inputs.severity }}
@@ -48,5 +53,20 @@ runs:
         INPUT_VERSION: ${{ inputs.version }}
         INPUT_IGNORE: ${{ inputs.ignore }}
         INPUT_CHANGED_ONLY: ${{ inputs.changed-only }}
+        INPUT_SARIF: ${{ inputs.sarif }}
         INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
       run: bash "${{ github.action_path }}/action/run.sh"
+
+    # With sarif enabled, run.sh defers its findings-based failure so these
+    # steps still run; the last step re-applies the exit code.
+    - name: Upload SARIF to code scanning
+      if: inputs.sarif == 'true' && steps.scan.outputs.has-sarif == 'true'
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: vibecheck.sarif
+        category: vibecheck
+
+    - name: Enforce fail-on
+      if: inputs.sarif == 'true' && steps.scan.outputs.exit-code == '1'
+      shell: bash
+      run: exit 1

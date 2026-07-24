@@ -56,7 +56,7 @@ describe('usage errors exit 2', () => {
   it('rejects an invalid --format value', () => {
     const res = run(['--format', 'yaml', '.'], { cwd: cleanDir });
     expect(res.status).toBe(2);
-    expect(res.stderr).toContain('Allowed choices are pretty, compact, json, quiet, gh');
+    expect(res.stderr).toContain('Allowed choices are pretty, compact, json, quiet, gh, sarif');
   });
 
   it('rejects an invalid --fail-on value', () => {
@@ -314,5 +314,48 @@ describe('pretty output', () => {
     const res = run(['.'], { cwd: cleanDir });
     expect(res.stdout).toContain('No issues found.');
     expect(res.stderr).toBe('');
+  });
+});
+
+describe('inline suppressions via the CLI', () => {
+  let supDir: string;
+
+  beforeAll(() => {
+    supDir = mkdtempSync(join(tmpdir(), 'vibecheck-cli-sup-'));
+    writeFileSync(join(supDir, 's.ts'), '// vibecheck-disable-next-line no-eval\nexport const out = eval(payload);\n');
+  });
+
+  afterAll(() => {
+    rmSync(supDir, { recursive: true, force: true });
+  });
+
+  it('suppressed findings do not fail the run and stay counted', () => {
+    const res = run(['.'], { cwd: supDir });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain('1 finding suppressed by inline directives (--show-suppressed to list)');
+  });
+
+  it('--show-suppressed lists them in pretty output', () => {
+    const res = run(['--show-suppressed', '.'], { cwd: supDir });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain('Suppressed:');
+    expect(res.stdout).toContain('s.ts:2:');
+    expect(res.stdout).toContain('no-eval');
+  });
+
+  it('adds suppressedCount to JSON, and the full list only with --show-suppressed', () => {
+    const parsed = JSON.parse(run(['--json', '.'], { cwd: supDir }).stdout);
+    expect(parsed.suppressedCount).toBe(1);
+    expect('suppressed' in parsed).toBe(false);
+    const withList = JSON.parse(run(['--json', '--show-suppressed', '.'], { cwd: supDir }).stdout);
+    expect(withList.suppressed).toHaveLength(1);
+    expect(withList.suppressed[0].rule).toBe('no-eval');
+  });
+
+  it('keeps default JSON free of the new fields when the features are unused', () => {
+    const parsed = JSON.parse(run(['--json', '.'], { cwd: warnDir }).stdout);
+    expect('suppressed' in parsed).toBe(false);
+    expect('suppressedCount' in parsed).toBe(false);
+    expect('baselinedCount' in parsed).toBe(false);
   });
 });

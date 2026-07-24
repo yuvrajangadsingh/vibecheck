@@ -55,6 +55,8 @@ export type Config = {
 
 export type ScanResult = {
   findings: Finding[];
+  /** Findings silenced by inline vibecheck-disable directives. Optional for backward compat. */
+  suppressed?: Finding[];
   filesScanned: number;
   duration: number;
   summary: Record<Severity, number>;

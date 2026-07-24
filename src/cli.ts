@@ -5,6 +5,8 @@ import { loadConfig } from './config.js';
 import { scan } from './scanner.js';
 import { applyFixes } from './fixer.js';
 import { formatPretty, formatJSON, formatQuiet, formatCompact, formatGh, filterBySeverity, padRight } from './formatter.js';
+import { formatSarif } from './sarif.js';
+import { BASELINE_FILENAME, loadBaseline, writeBaseline, partitionBaseline } from './baseline.js';
 import { getGitDiff, getGitRoot, resolveDiffPaths, parseDiff } from './diff.js';
 import { allRules, allMultilineRules } from './rules/index.js';
 import type { Severity } from './types.js';
@@ -15,7 +17,7 @@ import type { DiffMap } from './diff.js';
 declare const __VERSION__: string;
 const VERSION = typeof __VERSION__ !== 'undefined' ? __VERSION__ : '0.0.0-dev';
 
-type OutputFormat = 'pretty' | 'compact' | 'json' | 'quiet' | 'gh';
+type OutputFormat = 'pretty' | 'compact' | 'json' | 'quiet' | 'gh' | 'sarif';
 
 function parseMaxWarnings(value: string): number {
   const n = Number(value);
@@ -37,6 +39,8 @@ Examples:
   $ vibecheck --staged .                     Pre-commit: scan only staged changes
   $ vibecheck --fix .                        Remove AI attribution comments
   $ vibecheck . --format gh --fail-on warn   CI: GitHub annotations, fail on warnings
+  $ vibecheck --update-baseline .            Adopt: accept current findings, fail on new ones
+  $ vibecheck . --format sarif > out.sarif   SARIF 2.1.0 for GitHub code scanning
 
 Exit codes:
   0  clean, or no findings at or above --fail-on
@@ -55,7 +59,7 @@ const program = new Command()
   .addHelpText('after', HELP_EXTRA)
   .argument('[path]', 'File or directory to scan', '.')
   .option('-c, --config <file>', 'Path to config file')
-  .addOption(new Option('--format <format>', 'Output format').choices(['pretty', 'compact', 'json', 'quiet', 'gh']))
+  .addOption(new Option('--format <format>', 'Output format').choices(['pretty', 'compact', 'json', 'quiet', 'gh', 'sarif']))
   .option('--json', 'Output as JSON (alias for --format json)')
   .option('--ignore <patterns...>', 'Additional ignore patterns')
   .addOption(new Option('--severity <level>', 'Minimum severity to report').choices(['error', 'warn', 'info']).default('warn'))
@@ -66,6 +70,8 @@ const program = new Command()
   .option('--staged', 'Only scan lines changed in git diff --cached (staged)')
   .addOption(new Option('--diff-stdin', 'Only scan lines changed in a unified diff read from stdin').conflicts(['diff', 'staged']))
   .option('--statistics', 'Append per-rule finding counts to the report (pretty and json)')
+  .addOption(new Option('--update-baseline', `Record current findings in ${BASELINE_FILENAME}, then exit 0`).conflicts(['diff', 'staged', 'diffStdin']))
+  .option('--show-suppressed', 'List findings suppressed by inline directives (pretty and json)')
   .option('--fix', 'Automatically remove fixable findings (AI attribution comments)')
   .option('--mcp', 'Start MCP server (stdio transport) for AI agent integration')
   .addOption(new Option('-V').hideHelp())
@@ -82,6 +88,8 @@ const program = new Command()
     staged?: boolean;
     diffStdin?: boolean;
     statistics?: boolean;
+    updateBaseline?: boolean;
+    showSuppressed?: boolean;
     fix?: boolean;
     mcp?: boolean;
     V?: boolean;
@@ -159,6 +167,8 @@ const program = new Command()
     if (diffMap && diffMap.size === 0) {
       if (format === 'json') {
         console.log(JSON.stringify({ findings: [], filesScanned: 0, duration: 0, summary: { error: 0, warn: 0, info: 0 }, ...(options.statistics ? { statistics: {} } : {}) }));
+      } else if (format === 'sarif') {
+        console.log(formatSarif({ findings: [], suppressed: [], filesScanned: 0, duration: 0, summary: { error: 0, warn: 0, info: 0 } }, options.severity, VERSION));
       } else if (format === 'pretty' || format === 'quiet') {
         console.log('\n  No changed files to scan.\n');
       }
@@ -187,12 +197,34 @@ const program = new Command()
       }
     }
 
+    // Baseline: --update-baseline records the current findings; normal scans
+    // auto-load the file and report (and fail on) new findings only. All
+    // severities are recorded so the baseline is independent of --severity.
+    const baselinePath = resolve(BASELINE_FILENAME);
+    let baselinedCount: number | undefined;
+    if (options.updateBaseline) {
+      const recorded = writeBaseline(baselinePath, result.findings);
+      console.log(`Baseline written: ${recorded} finding${recorded === 1 ? '' : 's'} recorded in ${BASELINE_FILENAME}`);
+      return;
+    }
+    const baseline = loadBaseline(baselinePath);
+    if (baseline) {
+      const partitioned = partitionBaseline(result.findings, baseline);
+      baselinedCount = partitioned.baselinedCount;
+      const summary: Record<Severity, number> = { error: 0, warn: 0, info: 0 };
+      for (const f of partitioned.newFindings) summary[f.severity]++;
+      result = { ...result, findings: partitioned.newFindings, summary };
+    }
+
     // Output
     const minSeverity = options.severity;
     const reported = filterBySeverity(result.findings, minSeverity);
+    const formatOpts = { showSuppressed: options.showSuppressed, baselinedCount };
 
     if (format === 'json') {
-      console.log(formatJSON(result, minSeverity, { statistics: options.statistics }));
+      console.log(formatJSON(result, minSeverity, { statistics: options.statistics, ...formatOpts }));
+    } else if (format === 'sarif') {
+      console.log(formatSarif(result, minSeverity, VERSION));
     } else if (format === 'compact') {
       const out = formatCompact(result, minSeverity);
       if (out) console.log(out);
@@ -201,15 +233,16 @@ const program = new Command()
       if (out) console.log(out);
     } else if (format === 'quiet') {
       if (fixNote) console.log(fixNote);
-      console.log(formatQuiet(result, minSeverity));
+      console.log(formatQuiet(result, minSeverity, formatOpts));
     } else {
       const modeLabel = options.staged ? ' (staged)' : options.diff || options.diffStdin ? ' (diff)' : '';
       console.log(`\n  vibecheck v${VERSION}${modeLabel}\n`);
       if (fixNote) console.log(fixNote);
-      console.log(formatPretty(result, minSeverity, { statistics: options.statistics, fixHint: !options.fix }));
+      console.log(formatPretty(result, minSeverity, { statistics: options.statistics, fixHint: !options.fix, ...formatOpts }));
       // Gate on the raw scan result: a run with findings hidden by the
-      // --severity floor is not a clean run.
-      if (result.findings.length === 0 && process.stderr.isTTY) {
+      // --severity floor, suppressed inline, or absorbed by the baseline is
+      // not a clean run.
+      if (result.findings.length === 0 && (result.suppressed?.length ?? 0) === 0 && (baselinedCount ?? 0) === 0 && process.stderr.isTTY) {
         process.stderr.write('  ★ If this saved you a review cycle, star the repo: https://github.com/yuvrajangadsingh/vibecheck\n\n');
       }
     }

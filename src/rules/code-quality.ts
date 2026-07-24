@@ -31,7 +31,8 @@ export const codeQualityRules: Rule[] = [
     severity: 'warn',
     languages: ['ts', 'tsx'],
     pattern: /\bas\s+(?:unknown|any|never|const|[A-Za-z_$][\w$]*(?:\s*<[^;\n]*?>)?(?:\s*\[\])?)\s*\)?\s+as\s+(?:unknown|any|never|const|[A-Za-z_$][\w$]*(?:\s*<[^;\n]*?>)?(?:\s*\[\])?)/,
-    antiPattern: /^\s*(?:\/\/|\/\*|\*)|eslint-disable|@ts-expect-error|@ts-ignore|\/\/\s*(?:safe|intentional|vibecheck-ignore)|\/\*\s*(?:safe|intentional|vibecheck-ignore)/i,
+    // vibecheck-ignore handling moved to the scanner-level suppression pre-pass (suppressions.ts)
+    antiPattern: /^\s*(?:\/\/|\/\*|\*)|eslint-disable|@ts-expect-error|@ts-ignore|\/\/\s*(?:safe|intentional)|\/\*\s*(?:safe|intentional)/i,
     messageTemplate: 'Double type assertion bypasses TypeScript safety. Isolate and justify, or refactor to a safer cast.',
   },
   {
@@ -42,7 +43,7 @@ export const codeQualityRules: Rule[] = [
     severity: 'warn',
     languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs', 'py'],
     pattern: /^\s*(?:\/\/|\/\*+|\*|#)\s*(?:(?:generated|created|written|authored|co-?authored|made|produced)\s+(?:by|with|using)\s+(?:chatgpt|gpt-?\d(?:[.\w-]*)?|claude(?:\s+code)?|anthropic(?:\s+claude)?|openai|github\s+copilot|copilot|gemini)|(?:ai|llm)[-\s]*generated|(?:chatgpt|gpt-?\d(?:[.\w-]*)?|claude(?:\s+code)?|anthropic\s+claude|github\s+copilot|copilot|gemini)\s+(?:generated|wrote|created|authored|made|produced)\b|co-?authored-by:\s*(?:claude|chatgpt|openai|anthropic|copilot|gemini)|(?:anthropic\s+claude|claude\s+code|chatgpt|gpt-?\d(?:[.\w-]*)?)\s*(?:\*\/)?\s*$)/i,
-    antiPattern: /(?:anti-?pattern|example|fixture|snapshot|golden|test\s+case|do\s+not|don't|dont|avoid|\bdocs?\b|readme|changelog|prompt|expected|should\s+(?:flag|match|skip|not\s+match)|eslint-disable|vibecheck-ignore)/i,
+    antiPattern: /(?:anti-?pattern|example|fixture|snapshot|golden|test\s+case|do\s+not|don't|dont|avoid|\bdocs?\b|readme|changelog|prompt|expected|should\s+(?:flag|match|skip|not\s+match)|eslint-disable)/i,
     messageTemplate: 'AI attribution comment found. Remove model provenance leakage from production code.',
     fix: 'remove-line',
   },

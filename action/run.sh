@@ -12,6 +12,22 @@ case "${INPUT_FAIL_ON:-error}" in
   *) echo "::error::Invalid fail-on '${INPUT_FAIL_ON}'. Must be: error, warn, info, none"; exit 2 ;;
 esac
 
+case "${INPUT_SARIF:-false}" in
+  true|false) ;;
+  *) echo "::error::Invalid sarif '${INPUT_SARIF}'. Must be: true, false"; exit 2 ;;
+esac
+
+# With sarif enabled, findings-based failure is deferred via $GITHUB_OUTPUT so
+# the upload-sarif step still runs; action.yml re-applies the exit code after.
+finish() {
+  local code="$1"
+  if [ "${INPUT_SARIF:-false}" = "true" ]; then
+    echo "exit-code=${code}" >> "$GITHUB_OUTPUT"
+    exit 0
+  fi
+  exit "$code"
+}
+
 # --- Helpers: escape GitHub workflow command values ---
 escape_property() {
   local v="$1"
@@ -37,16 +53,17 @@ npm install -g "@yuvrajangadsingh/vibecheck@${INPUT_VERSION:-latest}" 2>&1
 echo "::endgroup::"
 
 # --- Build args ---
-VIBECHECK_ARGS=(. --json --severity "${INPUT_SEVERITY:-warn}")
-
+IGNORE_ARGS=()
 if [ -n "${INPUT_IGNORE:-}" ]; then
   IFS=',' read -ra PATTERNS <<< "$INPUT_IGNORE"
   for p in "${PATTERNS[@]}"; do
     trimmed="${p#"${p%%[![:space:]]*}"}"
     trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
-    [ -n "$trimmed" ] && VIBECHECK_ARGS+=(--ignore "$trimmed")
+    [ -n "$trimmed" ] && IGNORE_ARGS+=(--ignore "$trimmed")
   done
 fi
+
+VIBECHECK_ARGS=(. --json --severity "${INPUT_SEVERITY:-warn}" ${IGNORE_ARGS[@]+"${IGNORE_ARGS[@]}"})
 
 # --- Scan ---
 echo "::group::Scanning"
@@ -68,6 +85,21 @@ rm -f "$SCAN_STDERR"
 if [ -z "$SCAN_OUTPUT" ] || ! echo "$SCAN_OUTPUT" | jq -e 'has("findings") and (.findings | type == "array")' >/dev/null 2>&1; then
   echo "::error::vibecheck produced invalid output (missing findings array)"
   exit 1
+fi
+
+# --- SARIF for GitHub code scanning ---
+if [ "${INPUT_SARIF:-false}" = "true" ]; then
+  echo "::group::Generating SARIF"
+  HAS_SARIF="false"
+  if vibecheck . --format sarif --severity "${INPUT_SEVERITY:-warn}" --fail-on never \
+      ${IGNORE_ARGS[@]+"${IGNORE_ARGS[@]}"} > "${GITHUB_WORKSPACE:-.}/vibecheck.sarif"; then
+    HAS_SARIF="true"
+  else
+    echo "::warning::SARIF generation failed; skipping code scanning upload"
+    rm -f "${GITHUB_WORKSPACE:-.}/vibecheck.sarif"
+  fi
+  echo "has-sarif=${HAS_SARIF}" >> "$GITHUB_OUTPUT"
+  echo "::endgroup::"
 fi
 
 # --- Parse results ---
@@ -114,7 +146,7 @@ if [ "$FILTERED_COUNT" -eq 0 ]; then
     echo ""
     echo "No AI code smells detected. Scanned $FILES_SCANNED files in ${DURATION}ms."
   } >> "$GITHUB_STEP_SUMMARY"
-  exit 0
+  finish 0
 fi
 
 # --- Emit annotations (single jq pass, escaped for workflow commands) ---
@@ -174,22 +206,22 @@ case "$FAIL_ON" in
   error)
     if [ "$ERRORS_F" -gt 0 ]; then
       echo "::error::vibecheck found $ERRORS_F error(s)"
-      exit 1
+      finish 1
     fi
     ;;
   warn)
     if [ "$ERRORS_F" -gt 0 ] || [ "$WARNINGS_F" -gt 0 ]; then
       echo "::error::vibecheck found errors/warnings"
-      exit 1
+      finish 1
     fi
     ;;
   info)
     if [ "$FILTERED_COUNT" -gt 0 ]; then
       echo "::error::vibecheck found $FILTERED_COUNT issue(s)"
-      exit 1
+      finish 1
     fi
     ;;
   none) ;;
 esac
 
-exit 0
+finish 0
