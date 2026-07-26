@@ -27,6 +27,28 @@ function parseMaxWarnings(value: string): number {
   return n;
 }
 
+const RULE_LEVELS = new Set(['error', 'warn', 'info', 'off']);
+const KNOWN_RULE_IDS = new Set([...allRules, ...allMultilineRules].map((r) => r.id));
+
+// "--rule 'no-eval: off'" (whitespace optional, repeatable). Validated here so
+// a typo dies as a usage error (exit 2) before anything scans.
+function collectRuleSpec(value: string, previous: Array<[string, Severity | 'off']>): Array<[string, Severity | 'off']> {
+  const m = value.match(/^\s*([A-Za-z0-9-]+)\s*:\s*(\S+)\s*$/);
+  if (!m) {
+    throw new InvalidArgumentError(`Expected 'rule-id: error|warn|info|off', got "${value}".`);
+  }
+  const [, id, level] = m;
+  if (!KNOWN_RULE_IDS.has(id)) {
+    const near = [...KNOWN_RULE_IDS].filter((k) => k.includes(id) || id.includes(k)).slice(0, 3);
+    const hint = near.length ? ` Did you mean: ${near.join(', ')}?` : ' Run `vibecheck rules` to list rule ids.';
+    throw new InvalidArgumentError(`Unknown rule "${id}".${hint}`);
+  }
+  if (!RULE_LEVELS.has(level)) {
+    throw new InvalidArgumentError(`Invalid level "${level}" for rule "${id}". Use error, warn, info, or off.`);
+  }
+  return [...previous, [id, level as Severity | 'off']];
+}
+
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
@@ -41,6 +63,8 @@ Examples:
   $ vibecheck . --format gh --fail-on warn   CI: GitHub annotations, fail on warnings
   $ vibecheck --update-baseline .            Adopt: accept current findings, fail on new ones
   $ vibecheck . --format sarif > out.sarif   SARIF 2.1.0 for GitHub code scanning
+  $ vibecheck --rule 'no-eval: off' .        This run only, turn one rule off
+  $ vibecheck --no-defaults --rule 'no-obvious-comments: warn' .   Run exactly one rule
 
 Exit codes:
   0  clean, or no findings at or above --fail-on
@@ -72,6 +96,8 @@ const program = new Command()
   .option('--statistics', 'Append per-rule finding counts to the report (pretty and json)')
   .addOption(new Option('--update-baseline', `Record current findings in ${BASELINE_FILENAME}, then exit 0`).conflicts(['diff', 'staged', 'diffStdin']))
   .option('--show-suppressed', 'List findings suppressed by inline directives (pretty and json)')
+  .option('--rule <spec>', "Set one rule's severity for this run: 'rule-id: error|warn|info|off' (repeatable)", collectRuleSpec, [] as Array<[string, Severity | 'off']>)
+  .option('--no-defaults', "Start with every rule off for this run, ignoring the config file's rules; enable a subset with --rule")
   .option('--fix', 'Automatically remove fixable findings (AI attribution comments)')
   .option('--mcp', 'Start MCP server (stdio transport) for AI agent integration')
   .addOption(new Option('-V').hideHelp())
@@ -90,6 +116,8 @@ const program = new Command()
     statistics?: boolean;
     updateBaseline?: boolean;
     showSuppressed?: boolean;
+    rule: Array<[string, Severity | 'off']>;
+    defaults: boolean;
     fix?: boolean;
     mcp?: boolean;
     V?: boolean;
@@ -113,6 +141,17 @@ const program = new Command()
     }
 
     const config = loadConfig(options.config);
+
+    // Rule selection precedence: built-in defaults -> config file -> --rule
+    // flags. --no-defaults zeroes the base (including the config file's rules
+    // section) so `--no-defaults --rule 'x: warn'` runs exactly one rule.
+    if (!options.defaults) {
+      config.rules = {};
+      for (const id of KNOWN_RULE_IDS) config.rules[id] = 'off';
+    }
+    for (const [id, level] of options.rule) {
+      config.rules[id] = level;
+    }
 
     // Merge CLI ignore patterns
     if (options.ignore) {

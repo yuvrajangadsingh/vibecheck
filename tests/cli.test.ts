@@ -359,3 +359,82 @@ describe('inline suppressions via the CLI', () => {
     expect('baselinedCount' in parsed).toBe(false);
   });
 });
+
+describe('--rule and --no-defaults (issue #8)', () => {
+  let mixDir: string;
+
+  beforeAll(() => {
+    // eval (error, no-eval) + console.log (warn, no-console-pollution) in one file
+    mixDir = mkdtempSync(join(tmpdir(), 'vibecheck-cli-rule-'));
+    writeFileSync(join(mixDir, 'mix.ts'), "console.log('boot');\nexport const out = eval(payload);\n");
+  });
+
+  afterAll(() => {
+    rmSync(mixDir, { recursive: true, force: true });
+  });
+
+  it('--rule "x: off" disables exactly that rule for the run', () => {
+    const parsed = JSON.parse(run(['--json', '--rule', 'no-eval: off', '.'], { cwd: mixDir }).stdout);
+    const rules = parsed.findings.map((f: { rule: string }) => f.rule);
+    expect(rules).not.toContain('no-eval');
+    expect(rules).toContain('no-console-pollution');
+  });
+
+  it('--rule remaps severity for the run', () => {
+    const parsed = JSON.parse(run(['--json', '--severity', 'info', '--rule', 'no-eval: info', '.'], { cwd: mixDir }).stdout);
+    const evalFinding = parsed.findings.find((f: { rule: string }) => f.rule === 'no-eval');
+    expect(evalFinding.severity).toBe('info');
+  });
+
+  it('--no-defaults alone runs no rules and exits 0', () => {
+    const res = run(['--json', '--no-defaults', '.'], { cwd: mixDir });
+    expect(res.status).toBe(0);
+    expect(JSON.parse(res.stdout).findings).toHaveLength(0);
+  });
+
+  it('--no-defaults --rule runs exactly the chosen rule', () => {
+    const parsed = JSON.parse(run(['--json', '--no-defaults', '--rule', 'no-eval: error', '.'], { cwd: mixDir }).stdout);
+    const rules = parsed.findings.map((f: { rule: string }) => f.rule);
+    expect(rules).toEqual(['no-eval']);
+  });
+
+  it('--rule is repeatable', () => {
+    const parsed = JSON.parse(run(['--json', '--no-defaults', '--rule', 'no-eval: error', '--rule', 'no-console-pollution: warn', '.'], { cwd: mixDir }).stdout);
+    const rules = parsed.findings.map((f: { rule: string }) => f.rule).sort();
+    expect(rules).toEqual(['no-console-pollution', 'no-eval']);
+  });
+
+  it('--no-defaults also silences rules enabled by the config file', () => {
+    writeFileSync(join(mixDir, '.vibecheckrc'), JSON.stringify({ rules: { 'no-eval': 'error' } }));
+    try {
+      const parsed = JSON.parse(run(['--json', '--no-defaults', '.'], { cwd: mixDir }).stdout);
+      expect(parsed.findings).toHaveLength(0);
+    } finally {
+      rmSync(join(mixDir, '.vibecheckrc'), { force: true });
+    }
+  });
+
+  it('rejects an unknown rule id with a hint, exit 2', () => {
+    const res = run(['--rule', 'no-evall: off', '.'], { cwd: mixDir });
+    expect(res.status).toBe(2);
+    expect(res.stderr).toContain('Unknown rule');
+    expect(res.stderr).toContain('no-eval');
+  });
+
+  it('rejects an invalid level, exit 2', () => {
+    const res = run(['--rule', 'no-eval: loud', '.'], { cwd: mixDir });
+    expect(res.status).toBe(2);
+    expect(res.stderr).toContain('Invalid level');
+  });
+
+  it('rejects a malformed spec, exit 2', () => {
+    const res = run(['--rule', 'no-eval', '.'], { cwd: mixDir });
+    expect(res.status).toBe(2);
+    expect(res.stderr).toContain("Expected 'rule-id:");
+  });
+
+  it('whitespace-free spec form works too', () => {
+    const parsed = JSON.parse(run(['--json', '--no-defaults', '--rule', 'no-eval:error', '.'], { cwd: mixDir }).stdout);
+    expect(parsed.findings.map((f: { rule: string }) => f.rule)).toEqual(['no-eval']);
+  });
+});

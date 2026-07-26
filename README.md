@@ -128,6 +128,8 @@ Options:
   --statistics            Append per-rule finding counts (pretty and json output)
   --update-baseline       Record current findings in .vibecheck-baseline.json, then exit 0
   --show-suppressed       List findings suppressed by inline directives (pretty and json)
+  --rule <spec>           Set one rule's severity for this run: 'rule-id: error|warn|info|off' (repeatable)
+  --no-defaults           Start with every rule off for this run; enable a subset with --rule
   -q, --quiet             Only show summary (alias for --format quiet)
   --mcp                   Start MCP server (stdio transport)
   -v, --version           Show version
@@ -137,6 +139,17 @@ Options:
 `--format compact` prints one `path:line:col  severity  rule  message` line per finding (cmd-clickable in most editors). `--format gh` emits [GitHub Actions workflow commands](#ci-without-the-action) so findings show up as PR annotations. `--format sarif` emits [SARIF 2.1.0](#sarif--github-code-scanning) for the GitHub Security tab.
 
 `vibecheck rules` lists every rule with its severity, category, languages, and whether `--fix` can fix it. `vibecheck rules --json` emits the same list as JSON.
+
+### One-off rule selection
+
+`--rule` changes a single rule for one run without touching `.vibecheckrc` — same `'rule-id: level'` shape the config file uses, repeatable, `off` disables:
+
+```bash
+vibecheck --rule 'no-deep-nesting: off' .                        # everything except one rule
+vibecheck --no-defaults --rule 'no-obvious-comments: warn' .     # exactly one rule
+```
+
+`--no-defaults` starts the run with every rule off (the config file's `rules` section is ignored too), so only rules enabled by `--rule` execute — the eslint-style opt-in model when you want it. Flag order doesn't matter; an unknown rule id or level is a usage error (exit 2) with a hint. Rules enabled at `info` still respect the `--severity` floor — add `--severity info` to see them.
 
 ## Exit codes
 
