@@ -1,18 +1,7 @@
 import type { Rule, MultilineRule, MultilineFinding } from '../types.js';
+import { maskLines } from '../lexer.js';
 
 export const codeQualityRules: Rule[] = [
-  {
-    id: 'no-console-pollution',
-    name: 'No Console Pollution',
-    description: 'console.log/debug/info left in production code pollutes output and leaks info.',
-    category: 'code-quality',
-    severity: 'warn',
-    languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'],
-    pattern: /console\.(log|debug|info)\s*\(/,
-    antiPattern: /eslint-disable|\/\/\s*keep|logger/,
-    fileExclusions: /(?:^|[/\\])debug\.[cm]?[jt]sx?$|\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|[/\\])__tests__[/\\]/,
-    messageTemplate: 'console.log left in production code.',
-  },
   {
     id: 'no-ai-todo',
     name: 'No AI Placeholder TODOs',
@@ -51,22 +40,104 @@ export const codeQualityRules: Rule[] = [
 
 const CONTROL_FLOW_KEYWORDS = /^(if|else|for|while|do|switch|catch|finally|with|return|throw|new|delete|typeof|void|yield|await|class|try|import|export|from|as)$/;
 
-// Counts braces while skipping string/template literal contents
-function trackBraceDepth(line: string, depth: number): number {
-  let inStr: string | null = null;
-  let escaped = false;
-  for (const ch of line) {
-    if (escaped) { escaped = false; continue; }
-    if (ch === '\\') { escaped = true; continue; }
-    if (inStr) { if (ch === inStr) inStr = null; continue; }
-    if (ch === '"' || ch === "'" || ch === '`') { inStr = ch; continue; }
+// Counts braces on a lexer-masked line (strings/templates/regexes/comments
+// already blanked, so every remaining brace is structural).
+function countBraces(maskedLine: string, depth: number): number {
+  for (const ch of maskedLine) {
     if (ch === '{') depth++;
     if (ch === '}') depth--;
   }
   return depth;
 }
 
+// Same walk, but also reports the lowest depth reached mid-line. That
+// low-water mark is what catches `} else {`: the guarded block ends partway
+// through the line even though depth ends up back where it started.
+function scanBraces(maskedLine: string, depth: number): { end: number; min: number } {
+  let min = depth;
+  for (const ch of maskedLine) {
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth < min) min = depth;
+    }
+  }
+  return { end: depth, min };
+}
+
+// Build-time flags whose blocks bundlers eliminate from production output.
+// `NODE_ENV === 'production'` is deliberately absent: that guards a block that
+// DOES ship, so console inside it is still pollution.
+const DEV_GUARD =
+  /\b(?:import\.meta\.env\.DEV\b|__DEV__\b|(?:import\.meta\.env\.MODE|process\.env\.NODE_ENV)\s*!==?\s*['"]production['"]|process\.env\.NODE_ENV\s*===?\s*['"](?:development|dev|test)['"])/;
+
+// Only treat the flag as a guard when it actually gates something.
+// `const isDev = import.meta.env.DEV;` is a read, not a gate.
+const GUARD_CONTEXT = /\bif\s*\(|&&|\|\||\?/;
+
+// stdout is the product in a CLI entrypoint, not leakage.
+const CLI_DIRS = /(?:^|[/\\])(?:scripts|bin|tools|tasks)[/\\]/;
+
+const CONSOLE_CALL = /console\.(?:log|debug|info)\s*\(/;
+const CONSOLE_ANTI = /eslint-disable|\/\/\s*keep|logger/;
+const CONSOLE_FILE_EXCLUSIONS =
+  /(?:^|[/\\])debug\.[cm]?[jt]sx?$|\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|[/\\])__tests__[/\\]/;
+
 export const codeQualityMultilineRules: MultilineRule[] = [
+  {
+    // Multiline because what makes a console call harmless usually sits on a
+    // DIFFERENT line: a build-time guard whose body never reaches production.
+    // A line-scoped antiPattern cannot see it — the scanner tests antiPattern
+    // against the current line only.
+    id: 'no-console-pollution',
+    name: 'No Console Pollution',
+    description:
+      'console.log/debug/info left in production code pollutes output and leaks info. Calls inside build-stripped dev guards, and in CLI entrypoints, are ignored.',
+    category: 'code-quality',
+    severity: 'warn',
+    languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'],
+    messageTemplate: 'console.log left in production code.',
+    detect(lines: string[], filePath: string): MultilineFinding[] {
+      if (CONSOLE_FILE_EXCLUSIONS.test(filePath) || CLI_DIRS.test(filePath)) return [];
+
+      const findings: MultilineFinding[] = [];
+      const masked = maskLines(lines);
+      // Depths at which currently-open dev-guarded blocks live.
+      const devDepths: number[] = [];
+      let depth = 0;
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const { end, min } = scanBraces(masked[i], depth);
+
+        // Close any guarded block whose depth we dipped out of on this line.
+        // Runs before the console check so `} else {` un-guards its own line.
+        while (devDepths.length && min < devDepths[devDepths.length - 1]) devDepths.pop();
+
+        const guardsHere = DEV_GUARD.test(line) && GUARD_CONTEXT.test(line);
+
+        // Match on the masked line so a console call inside a string or a
+        // commented-out one is inert.
+        const hit = CONSOLE_CALL.exec(masked[i]);
+        // `guardsHere` covers the braceless single-line form:
+        // `if (import.meta.env.DEV) console.log(x)`.
+        if (hit && !devDepths.length && !guardsHere && !CONSOLE_ANTI.test(line)) {
+          findings.push({
+            line: i + 1,
+            column: hit.index + 1,
+            message: 'console.log left in production code.',
+            snippet: line,
+          });
+        }
+
+        // A guard that opened a block: its body sits at the deeper level.
+        if (guardsHere && end > depth) devDepths.push(end);
+        depth = end;
+      }
+
+      return findings;
+    },
+  },
   {
     id: 'no-deep-nesting',
     name: 'No Deep Nesting',
@@ -77,21 +148,18 @@ export const codeQualityMultilineRules: MultilineRule[] = [
     messageTemplate: 'Code nested too deeply. Use early returns or extract functions.',
     detect(lines: string[]): MultilineFinding[] {
       const findings: MultilineFinding[] = [];
+      const masked = maskLines(lines);
       const reported = new Set<number>();
       let depth = 0;
       for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        for (const ch of line) {
-          if (ch === '{') depth++;
-          if (ch === '}') depth--;
-        }
+        depth = countBraces(masked[i], depth);
         if (depth >= 5 && !reported.has(depth)) {
           reported.add(depth);
           findings.push({
             line: i + 1,
             column: 1,
             message: `Nesting depth is ${depth}. Use early returns or extract helper functions.`,
-            snippet: line,
+            snippet: lines[i],
           });
         }
         if (depth < 5) reported.clear();
@@ -109,10 +177,13 @@ export const codeQualityMultilineRules: MultilineRule[] = [
     messageTemplate: 'Function exceeds 80 lines. Break it into smaller functions.',
     detect(lines: string[]): MultilineFinding[] {
       const findings: MultilineFinding[] = [];
+      const masked = maskLines(lines);
       const funcPattern = /(?:(?:export\s+)?(?:async\s+)?function\s+(\w{1,64})|(?:const|let|var)\s+(\w{1,64})\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>|(\w{1,64})\s*(?::\s*\w[^=]*)?\s*\([^)]*\)\s*(?::\s*\w[^{]*)?\s*\{)/;
 
       for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
+        // Matching and brace tracking both run on the masked line, so a
+        // `function` keyword or brace inside a string/regex/comment is inert.
+        const line = masked[i];
         // Skip pathological long lines (minified/generated); funcPattern is quadratic on them.
         if (line.length > 2000) continue;
         const match = funcPattern.exec(line);
@@ -130,7 +201,7 @@ export const codeQualityMultilineRules: MultilineRule[] = [
         let funcEnd = i;
 
         for (let j = i; j < lines.length; j++) {
-          braceDepth = trackBraceDepth(lines[j], braceDepth);
+          braceDepth = countBraces(masked[j], braceDepth);
           if (braceDepth === 0) {
             funcEnd = j;
             break;
@@ -143,7 +214,7 @@ export const codeQualityMultilineRules: MultilineRule[] = [
             line: i + 1,
             column: 1,
             message: `Function '${funcName}' is ${lineCount} lines long (max 80). Break it into smaller functions.`,
-            snippet: line,
+            snippet: lines[i],
           });
         }
       }

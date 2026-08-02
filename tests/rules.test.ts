@@ -128,6 +128,72 @@ describe('error handling rules', () => {
     expect(findings.length).toBe(1);
   });
 
+  it('skips single-line catch with content when outer scopes close after it (gstudio FP)', () => {
+    // sameLineDepth goes to -1 here: the catch body closes AND two outer
+    // scopes close on the same line. Used to be reported as empty.
+    const lines = [
+      "$('x').onclick = async () => { try { await go(); } catch (e) { toastErr(e); } };",
+    ];
+    const findings = emptyCatch.detect(lines, 'test.ts');
+    expect(findings.length).toBe(0);
+  });
+
+  it('still flags a truly empty single-line catch with outer closers', () => {
+    const lines = [
+      'run(() => { try { go(); } catch (e) {} });',
+    ];
+    const findings = emptyCatch.detect(lines, 'test.ts');
+    expect(findings.length).toBe(1);
+  });
+
+  it('ignores braces inside strings and regex literals when tracking the body', () => {
+    const lines = [
+      'try {',
+      '  go();',
+      '} catch (e) {',
+      "  log('} not a close', /}/);",
+      '  handle(e);',
+      '}',
+    ];
+    const findings = emptyCatch.detect(lines, 'test.ts');
+    expect(findings.length).toBe(0);
+  });
+
+  it('does not treat a catch written inside a string as real (finding 3)', () => {
+    const lines = ['const text = "catch (e) {"; if (ok) { console.error(err); }'];
+    expect(emptyCatch.detect(lines, 'test.ts').length).toBe(0);
+    expect(consoleOnly.detect(lines, 'test.ts').length).toBe(0);
+  });
+
+  it('does not treat a single-line empty catch inside a string as real', () => {
+    const lines = ['const text = "catch (e) {}";'];
+    expect(emptyCatch.detect(lines, 'test.ts').length).toBe(0);
+  });
+
+  it('reports the real catch column when a fake one precedes it on the line', () => {
+    const lines = ['const s = "catch {}"; try { go(); } catch (e) {}'];
+    const f = emptyCatch.detect(lines, 'test.ts');
+    expect(f.length).toBe(1);
+    // column points at the real catch, past the string
+    expect(f[0].column).toBeGreaterThan(30);
+  });
+
+  it('single-line console-only catch is still flagged with outer closers on the line', () => {
+    const lines = [
+      "wrap(() => { try { go(); } catch (e) { console.error(e); } });",
+    ];
+    const findings = consoleOnly.detect(lines, 'test.ts');
+    expect(findings.length).toBe(1);
+  });
+
+  it('single-line catch with real handling is not console-only despite outer closers', () => {
+    const lines = [
+      "wrap(() => { try { go(); } catch (e) { rescue(e); } });",
+    ];
+    const findings = consoleOnly.detect(lines, 'test.ts');
+    expect(findings.length).toBe(0);
+  });
+
   it('skips non-empty catch blocks', () => {
     const lines = ['try {', '  doSomething();', '} catch (e) {', '  throw e;', '}'];
     const findings = emptyCatch.detect(lines, 'test.ts');
@@ -271,19 +337,25 @@ describe('ai tell rules', () => {
 });
 
 describe('code quality rules', () => {
-  const consolePollution = allRules.find(r => r.id === 'no-console-pollution')!;
+  // no-console-pollution became a MultilineRule so it can see a build-time
+  // guard on a surrounding line, so these assert through the scanner rather
+  // than against a line regex.
+  const consolePollution = allMultilineRules.find(r => r.id === 'no-console-pollution')!;
+  const consoleHits = (src: string) =>
+    consolePollution.detect(src.split('\n'), 'src/app.ts');
   const aiTodo = allRules.find(r => r.id === 'no-ai-todo')!;
   const aiAttribution = allRules.find(r => r.id === 'no-ai-attribution')!;
   const godFunc = allMultilineRules.find(r => r.id === 'no-god-function')!;
 
   it('detects console.log', () => {
-    expect(consolePollution.pattern.test('console.log("debug")')).toBe(true);
-    expect(consolePollution.pattern.test('console.debug("test")')).toBe(true);
+    expect(consoleHits('console.log("debug")')).toHaveLength(1);
+    expect(consoleHits('console.debug("test")')).toHaveLength(1);
+    expect(consoleHits('console.info("test")')).toHaveLength(1);
   });
 
   it('skips console.error and console.warn', () => {
-    expect(consolePollution.pattern.test('console.error("fail")')).toBe(false);
-    expect(consolePollution.pattern.test('console.warn("warning")')).toBe(false);
+    expect(consoleHits('console.error("fail")')).toHaveLength(0);
+    expect(consoleHits('console.warn("warning")')).toHaveLength(0);
   });
 
   it('detects AI placeholder TODOs', () => {
@@ -295,6 +367,17 @@ describe('code quality rules', () => {
   it('skips regular TODOs', () => {
     expect(aiTodo.pattern.test('// TODO: @yuvraj review this before merge')).toBe(false);
     expect(aiTodo.pattern.test('// TODO: blocked by upstream PR #123')).toBe(false);
+  });
+
+  it('does not misparse regex literals containing quotes (gstudio esc FP)', () => {
+    // /'/g used to open a phantom string in the brace tracker, swallowing the
+    // closing brace and measuring the one-liner as hundreds of lines long.
+    const lines = [
+      `function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }`,
+    ];
+    for (let i = 0; i < 200; i++) lines.push('const filler' + i + ' = ' + i + ';');
+    const findings = godFunc.detect(lines, 'test.ts');
+    expect(findings.length).toBe(0);
   });
 
   it('detects god functions (>80 lines)', () => {
@@ -952,5 +1035,109 @@ describe('file exclusions', () => {
     const content = 'const x = data as any;\n';
     expect(scanContent(content, 'mod.mts', config).some(f => f.rule === 'no-ts-any')).toBe(true);
     expect(scanContent(content, 'mod.cts', config).some(f => f.rule === 'no-ts-any')).toBe(true);
+  });
+});
+
+// Regression suite for no-console-pollution false positives found by dogfooding
+// v1.14.0 against a Vite + React app: 19 findings, all 19 wrong. 13 sat inside
+// `if (import.meta.env.DEV)` blocks, which Vite strips from production builds,
+// and 6 were in a scripts/ CLI where stdout is the entire point.
+//
+// Fixtures below are real code from that repo, not invented shapes.
+describe('no-console-pollution: build-stripped dev guards', () => {
+  const config = loadConfig();
+  const flagged = (content: string, file = 'src/app.ts') =>
+    scanContent(content, file, config).filter(f => f.rule === 'no-console-pollution');
+
+  it('does not flag console inside an import.meta.env.DEV block', () => {
+    const content = [
+      'const json = await rawBrowse(browseId);',
+      '',
+      'if (import.meta.env.DEV) {',
+      '  console.debug("[playlist] browse response", browseId, json);',
+      '}',
+      '',
+    ].join('\n');
+    expect(flagged(content)).toHaveLength(0);
+  });
+
+  it('does not flag a DEV guard nested inside other blocks', () => {
+    const content = [
+      '.then((src) => {',
+      '  if (token !== resolveTokenRef.current) return;',
+      '  if (import.meta.env.DEV) {',
+      '    console.debug("[audio] setting src for", videoId, "→", src);',
+      '  }',
+      '  el.src = src;',
+      '});',
+    ].join('\n');
+    expect(flagged(content)).toHaveLength(0);
+  });
+
+  it('does not flag the single-line guard form', () => {
+    const content = 'if (import.meta.env.DEV) console.log("ready");\n';
+    expect(flagged(content)).toHaveLength(0);
+  });
+
+  it('does not flag other bundlers\' production guards', () => {
+    const nodeEnv = [
+      "if (process.env.NODE_ENV !== 'production') {",
+      '  console.log("dev only");',
+      '}',
+    ].join('\n');
+    const dunder = ['if (__DEV__) {', '  console.log("dev only");', '}'].join('\n');
+    expect(flagged(nodeEnv)).toHaveLength(0);
+    expect(flagged(dunder)).toHaveLength(0);
+  });
+
+  it('does not flag console in scripts/ CLI entrypoints', () => {
+    const content = [
+      'console.log(`Testing videoId: ${VIDEO_ID}`);',
+      'console.log("Initializing youtubei.js…\\n");',
+    ].join('\n');
+    expect(flagged(content, 'scripts/test-player.mjs')).toHaveLength(0);
+  });
+
+  // The other half. A fix that silences the cases above by disabling the rule
+  // is not a fix, so these must keep firing.
+  it('still flags a bare console.log in source', () => {
+    expect(flagged('console.log("debug");\n')).toHaveLength(1);
+  });
+
+  it('still flags console AFTER the dev block closes', () => {
+    const content = [
+      'if (import.meta.env.DEV) {',
+      '  console.debug("gated");',
+      '}',
+      'console.log("this one actually ships");',
+    ].join('\n');
+    const hits = flagged(content);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].line).toBe(4);
+  });
+
+  it('still flags console in the else branch of a dev check', () => {
+    const content = [
+      'if (import.meta.env.DEV) {',
+      '  console.debug("gated");',
+      '} else {',
+      '  console.log("ships to prod");',
+      '}',
+    ].join('\n');
+    const hits = flagged(content);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].line).toBe(4);
+  });
+
+  it('still flags console in a file that merely mentions the DEV flag elsewhere', () => {
+    const content = [
+      'const debug = import.meta.env.DEV;',
+      'console.log("unconditional");',
+    ].join('\n');
+    expect(flagged(content)).toHaveLength(1);
+  });
+
+  it('still flags console in a non-scripts .mjs module', () => {
+    expect(flagged('console.log("ships");\n', 'src/worker.mjs')).toHaveLength(1);
   });
 });

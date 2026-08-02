@@ -16,6 +16,95 @@ function getLanguage(filePath: string): string {
   return ext;
 }
 
+// JavaScript MIME type essences per the WHATWG MIME Sniffing Standard, which
+// HTML uses for the script[type] essence match. `module` is a special value,
+// and an absent/empty type is a classic script.
+const JS_SCRIPT_TYPES = new Set([
+  'application/ecmascript', 'application/javascript', 'application/x-ecmascript',
+  'application/x-javascript', 'text/ecmascript', 'text/javascript',
+  'text/javascript1.0', 'text/javascript1.1', 'text/javascript1.2',
+  'text/javascript1.3', 'text/javascript1.4', 'text/javascript1.5',
+  'text/jscript', 'text/livescript', 'text/x-ecmascript', 'text/x-javascript',
+]);
+
+const isNameDelim = (ch: string | undefined) => ch === undefined || /[\s/>]/.test(ch);
+
+function scriptIsJs(tagInner: string): boolean {
+  // src= makes it external; attribute names are tokenized (start-or-space
+  // anchored) so data-src / data-type never match the bare attributes.
+  if (/(?:^|\s)src\s*=/i.test(tagInner)) return false;
+  const typeMatch = /(?:^|\s)type\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tagInner);
+  if (!typeMatch) return true; // no type → classic script
+  const essence = (typeMatch[1] ?? typeMatch[2] ?? typeMatch[3]).split(';')[0].trim().toLowerCase();
+  return essence === '' || essence === 'module' || JS_SCRIPT_TYPES.has(essence);
+}
+
+/**
+ * Reduce an HTML document to its inline JavaScript: every char outside an
+ * inline JS `<script>` body is blanked to a space, newlines preserved, so
+ * finding line/column numbers and suppression comments map 1:1 onto the
+ * original file. A small tag-aware pass (not a regex) handles the traps:
+ * `<!-- ... -->` comments are skipped (a `<script>` inside a comment is not a
+ * script); the opening tag is parsed with quote awareness so `>` inside an
+ * attribute value does not end it early; `<script` must be followed by a name
+ * delimiter (so `<script-foo>` is not a script); and the body ends only at a
+ * real `</script` + delimiter (not `</scripture>`). External (`src=`) and
+ * non-JS (`application/json`, importmap, …) scripts are skipped.
+ */
+export function extractInlineScripts(content: string): string {
+  const n = content.length;
+  const out: string[] = new Array(n);
+  for (let k = 0; k < n; k++) out[k] = content[k] === '\n' ? '\n' : ' ';
+  const lower = content.toLowerCase();
+
+  let i = 0;
+  while (i < n) {
+    if (lower.startsWith('<!--', i)) {                 // HTML comment: skip it entirely
+      const end = content.indexOf('-->', i + 4);
+      i = end === -1 ? n : end + 3;
+      continue;
+    }
+    if (!(lower.startsWith('<script', i) && isNameDelim(content[i + 7]))) { i++; continue; }
+
+    // Parse the opening tag, honoring quotes, up to the terminating '>'.
+    let j = i + 7;
+    let quote = '';
+    while (j < n) {
+      const ch = content[j];
+      if (quote) { if (ch === quote) quote = ''; }
+      else if (ch === '"' || ch === "'") quote = ch;
+      else if (ch === '>') break;
+      j++;
+    }
+    if (j >= n) { i = n; break; }                      // unterminated opening tag
+    const tagInner = content.slice(i + 7, j);
+    const bodyStart = j + 1;
+    const selfClosing = content[j - 1] === '/';
+
+    // Find the matching </script + name delimiter.
+    let bodyEnd = n, closeEnd = n;
+    let k = bodyStart;
+    while (k < n) {
+      const idx = lower.indexOf('</script', k);
+      if (idx === -1) break;
+      if (isNameDelim(content[idx + 8])) {
+        let m = idx + 8;
+        while (m < n && content[m] !== '>') m++;
+        bodyEnd = idx;
+        closeEnd = m < n ? m + 1 : n;
+        break;
+      }
+      k = idx + 8;
+    }
+
+    if (!selfClosing && scriptIsJs(tagInner)) {
+      for (let p = bodyStart; p < bodyEnd; p++) out[p] = content[p];
+    }
+    i = closeEnd;
+  }
+  return out.join('');
+}
+
 function resolveSeverity(configValue: string | undefined, fallback: Severity): Severity {
   if (configValue && VALID_SEVERITIES.includes(configValue as Severity)) {
     return configValue as Severity;
@@ -35,7 +124,13 @@ export type ContentScanResult = {
  * (see suppressions.ts), so every consumer of the scanner honors them.
  */
 export function scanContentDetailed(content: string, filePath: string, config: Config): ContentScanResult {
-  const lang = getLanguage(filePath);
+  let lang = getLanguage(filePath);
+  // HTML: lint the inline <script> bodies as JS. Everything else is blanked
+  // in-place, so finding positions and suppression comments line up 1:1.
+  if (lang === 'html' || lang === 'htm') {
+    content = extractInlineScripts(content);
+    lang = 'js';
+  }
   const lines = content.split('\n');
   const suppressions = parseSuppressions(content, lang);
   const findings: Finding[] = [];

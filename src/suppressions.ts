@@ -27,6 +27,8 @@
  * comments are ignored there entirely, so they can never be forged either.
  */
 
+import { lexJs, type Comment } from './lexer.js';
+
 type RuleFilter = 'all' | Set<string>;
 
 export type Suppressions = {
@@ -36,137 +38,11 @@ export type Suppressions = {
   lines: Map<number, RuleFilter>;
 };
 
-type Comment = {
-  body: string;
-  startLine: number;
-  endLine: number;
-  /** Character offset of the comment opener. */
-  start: number;
-  /** Block comment whose last significant code char was `{` (JSX expression-comment form). */
-  braceAdjacent: boolean;
-};
-
 const JS_LANGS = new Set(['js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs']);
 const HASH_LANGS = new Set(['py']);
 
 // Longest alternative first so `disable-next-line` is not read as `disable`.
 const DIRECTIVE = /^vibecheck-(disable-next-line|disable-line|disable|ignore)(?=$|[\s:])([\s\S]*)$/;
-
-// After these keywords a `/` starts a regex literal, not division.
-const REGEX_PRECEDING_KEYWORDS = new Set([
-  'return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void',
-  'throw', 'case', 'do', 'else', 'yield', 'await',
-]);
-
-// Characters that end a value expression: after these, `/` means division.
-const VALUE_END = /[\w$)\]'"`]/;
-
-/** Extract comments from JS/TS source with a string/template/regex-aware pass. */
-function jsComments(content: string): Comment[] {
-  const comments: Comment[] = [];
-  const n = content.length;
-  let line = 1;
-  let i = 0;
-  let state: 'code' | 'single' | 'double' | 'template' | 'line' | 'block' | 'regex' | 'regexClass' = 'code';
-  // Template nesting: 'tpl' = inside template text, numbers = brace depth of a `${}` interpolation.
-  const stack: Array<'tpl' | number> = [];
-  let lastSig = ''; // last significant char seen in code state
-  let lastWord = ''; // identifier/keyword the significant char terminates
-  let bodyStart = 0;
-  let commentLine = 0;
-  let commentStart = 0; // offset of the `//` or `/*` opener
-  let commentBrace = false; // opened while lastSig === '{'
-
-  const closeLineComment = (end: number) => {
-    comments.push({
-      body: content.slice(bodyStart, end), startLine: commentLine, endLine: commentLine,
-      start: commentStart, braceAdjacent: false,
-    });
-    state = 'code';
-  };
-
-  while (i < n) {
-    const c = content[i];
-    const next = i + 1 < n ? content[i + 1] : '';
-
-    switch (state) {
-      case 'code': {
-        const top = stack.length > 0 ? stack[stack.length - 1] : undefined;
-        if (typeof top === 'number' && c === '{') {
-          stack[stack.length - 1] = top + 1;
-          lastSig = c; lastWord = '';
-        } else if (typeof top === 'number' && c === '}') {
-          if (top === 0) { stack.pop(); state = 'template'; } else { stack[stack.length - 1] = top - 1; lastSig = c; lastWord = ''; }
-        } else if (c === "'") { state = 'single'; }
-        else if (c === '"') { state = 'double'; }
-        else if (c === '`') { stack.push('tpl'); state = 'template'; }
-        else if (c === '/' && next === '/') { state = 'line'; bodyStart = i + 2; commentLine = line; commentStart = i; i++; }
-        else if (c === '/' && next === '*') { state = 'block'; bodyStart = i + 2; commentLine = line; commentStart = i; commentBrace = lastSig === '{'; i++; }
-        else if (c === '/') {
-          // Regex vs division: `/` after a value token is division, except after
-          // keywords like `return` where a regex can start.
-          const regexAllowed = !VALUE_END.test(lastSig) || REGEX_PRECEDING_KEYWORDS.has(lastWord);
-          if (regexAllowed) { state = 'regex'; } else { lastSig = c; lastWord = ''; }
-        } else if (/[A-Za-z0-9_$]/.test(c)) {
-          lastWord = /[A-Za-z0-9_$]/.test(lastSig) ? lastWord + c : c;
-          lastSig = c;
-        } else if (!/\s/.test(c)) { lastSig = c; lastWord = ''; }
-        break;
-      }
-      case 'single':
-      case 'double': {
-        const quote = state === 'single' ? "'" : '"';
-        if (c === '\\') { i++; } // skipped char is line-counted at the loop bottom
-        else if (c === quote) { state = 'code'; lastSig = quote; lastWord = ''; }
-        else if (c === '\n') { state = 'code'; } // unterminated string: bail to bound damage
-        break;
-      }
-      case 'template': {
-        if (c === '\\') { i++; }
-        else if (c === '$' && next === '{') { stack.push(0); state = 'code'; lastSig = ''; lastWord = ''; i++; }
-        else if (c === '`') {
-          if (stack[stack.length - 1] === 'tpl') stack.pop();
-          state = 'code'; lastSig = '`'; lastWord = '';
-        }
-        break;
-      }
-      case 'line': {
-        if (c === '\n') closeLineComment(i);
-        break;
-      }
-      case 'block': {
-        if (c === '*' && next === '/') {
-          comments.push({
-            body: content.slice(bodyStart, i), startLine: commentLine, endLine: line,
-            start: commentStart, braceAdjacent: commentBrace,
-          });
-          state = 'code';
-          i++;
-        }
-        break;
-      }
-      case 'regex': {
-        if (c === '\\') { i++; }
-        else if (c === '[') { state = 'regexClass'; }
-        else if (c === '/') { state = 'code'; lastSig = ')'; lastWord = ''; }
-        else if (c === '\n') { state = 'code'; lastSig = ''; lastWord = ''; } // regex can't span lines: bail
-        break;
-      }
-      case 'regexClass': {
-        if (c === '\\') { i++; }
-        else if (c === ']') { state = 'regex'; }
-        else if (c === '\n') { state = 'code'; lastSig = ''; lastWord = ''; }
-        break;
-      }
-    }
-
-    if (content[i] === '\n') line++;
-    i++;
-  }
-
-  if (state === 'line') closeLineComment(n);
-  return comments;
-}
 
 /** Extract `#` comments from Python source, skipping string literals. */
 function hashComments(content: string): Comment[] {
@@ -244,7 +120,7 @@ export function parseSuppressions(content: string, lang: string): Suppressions |
   let comments: Comment[];
   let decor: RegExp;
   if (JS_LANGS.has(lang)) {
-    comments = jsComments(content);
+    comments = lexJs(content).comments;
     decor = /^[\s/*]+/; // strip `*` JSDoc gutters and stray slashes
   } else if (HASH_LANGS.has(lang)) {
     comments = hashComments(content);

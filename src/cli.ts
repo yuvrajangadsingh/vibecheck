@@ -211,7 +211,7 @@ const program = new Command()
       } else if (format === 'pretty' || format === 'quiet') {
         console.log('\n  No changed files to scan.\n');
       }
-      process.exit(0);
+      return; // exitCode stays 0; returning lets stdout flush before exit
     }
 
     let result;
@@ -296,7 +296,7 @@ const program = new Command()
         failed = true;
       }
     }
-    if (failed) process.exit(1);
+    if (failed) process.exitCode = 1;
   });
 
 program

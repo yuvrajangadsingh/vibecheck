@@ -1,21 +1,33 @@
 import type { Rule, MultilineRule, MultilineFinding } from '../types.js';
+import { maskLines } from '../lexer.js';
 
 // Matches both catch(e) { and catch { (parameterless, ES2019+)
 const CATCH_OPEN = /catch\s*(?:\([^)]*\))?\s*\{/;
 
-// Counts braces while skipping string/template literal contents
-function trackBraceDepth(line: string, depth: number): number {
-  let inStr: string | null = null;
-  let escaped = false;
-  for (const ch of line) {
-    if (escaped) { escaped = false; continue; }
-    if (ch === '\\') { escaped = true; continue; }
-    if (inStr) { if (ch === inStr) inStr = null; continue; }
-    if (ch === '"' || ch === "'" || ch === '`') { inStr = ch; continue; }
+// Counts braces on a lexer-masked line (strings/templates/regexes/comments
+// already blanked, so every remaining brace is structural).
+function countBraces(maskedLine: string, depth: number): number {
+  for (const ch of maskedLine) {
     if (ch === '{') depth++;
     if (ch === '}') depth--;
   }
   return depth;
+}
+
+/**
+ * Index of the `}` that closes the block opened by the first char of
+ * `maskedAfterBrace` (which must be `{`), or -1 if it does not close on this
+ * line. Keeps single-line body extraction from running past the catch block
+ * when outer scopes also close on the same line (`} catch (e) { x(); } };`).
+ */
+function matchingBraceEnd(maskedAfterBrace: string): number {
+  let depth = 0;
+  for (let k = 0; k < maskedAfterBrace.length; k++) {
+    const ch = maskedAfterBrace[k];
+    if (ch === '{') depth++;
+    if (ch === '}') { depth--; if (depth === 0) return k; }
+  }
+  return -1;
 }
 
 export const errorHandlingRules: Rule[] = [
@@ -55,29 +67,36 @@ export const errorHandlingMultilineRules: MultilineRule[] = [
     messageTemplate: 'Empty catch block swallows errors silently.',
     detect(lines: string[]): MultilineFinding[] {
       const findings: MultilineFinding[] = [];
+      const masked = maskLines(lines);
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
+        // Discovery runs on the masked line so a `catch (e) {}` written inside a
+        // string, template, regex, or comment can never be mistaken for real
+        // code. Raw `line` is used only for the snippet (offsets are identical).
+        const structural = masked[i];
 
         // Single-line empty catch: catch (e) { } or catch { }
-        if (/catch\s*(?:\([^)]*\))?\s*\{\s*\}/.test(line)) {
+        if (/catch\s*(?:\([^)]*\))?\s*\{\s*\}/.test(structural)) {
           findings.push({
             line: i + 1,
-            column: line.search(/catch/) + 1,
+            column: structural.search(/catch/) + 1,
             message: 'Empty catch block swallows errors silently.',
             snippet: line,
           });
           continue;
         }
 
-        if (!CATCH_OPEN.test(line)) continue;
+        if (!CATCH_OPEN.test(structural)) continue;
 
-        // Check if catch block closes on the same line (single-line with content)
-        const catchIdx = line.search(/catch/);
-        const braceIdx = line.indexOf('{', catchIdx);
+        // Check if catch block closes on the same line (single-line with content).
+        // Depth runs on the masked line: braces inside strings/regexes must not
+        // count, and outer scopes closing after the catch can push the count
+        // below zero — any <= 0 means the catch body ended on this line.
+        const catchIdx = structural.search(/catch/);
+        const braceIdx = structural.indexOf('{', catchIdx);
         if (braceIdx === -1) continue;
-        const afterBrace = line.substring(braceIdx);
-        const sameLineDepth = trackBraceDepth(afterBrace, 0);
-        if (sameLineDepth === 0) continue; // Block opened and closed on same line
+        const sameLineDepth = countBraces(structural.substring(braceIdx), 0);
+        if (sameLineDepth <= 0) continue; // Block opened and closed on same line
 
         // Scan the catch block body using brace tracking
         let depth = sameLineDepth;
@@ -91,10 +110,10 @@ export const errorHandlingMultilineRules: MultilineRule[] = [
           // surrounding statement (fixes the empty-catch-before-finally FN),
           // while a `}` that closes a nested block opened on the catch line
           // (depth > 1) must not be mistaken for the catch's end (avoids a FP).
-          if (depth === 1 && /^\}/.test(trimmed)) break;
+          if (depth === 1 && /^\}/.test(masked[j].trim())) break;
 
           const prevDepth = depth;
-          depth = trackBraceDepth(lines[j], depth);
+          depth = countBraces(masked[j], depth);
 
           if (prevDepth > 0) {
             if (trimmed === '' || trimmed === '}') continue;
@@ -135,25 +154,30 @@ export const errorHandlingMultilineRules: MultilineRule[] = [
     messageTemplate: 'Catch block only logs the error without rethrowing or handling it.',
     detect(lines: string[]): MultilineFinding[] {
       const findings: MultilineFinding[] = [];
+      const masked = maskLines(lines);
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
-        if (!CATCH_OPEN.test(line)) continue;
+        // Discover the catch on the masked line: `catch (e) {` inside a string
+        // or comment must not match (raw line is kept for snippet/body only).
+        const structural = masked[i];
+        if (!CATCH_OPEN.test(structural)) continue;
 
-        // Find the catch block's opening brace
-        const catchIdx = line.search(/catch/);
-        const braceIdx = line.indexOf('{', catchIdx);
+        const catchIdx = structural.search(/catch/);
+        const braceIdx = structural.indexOf('{', catchIdx);
         if (braceIdx === -1) continue;
 
         // Check if block closes on same line
         const afterBrace = line.substring(braceIdx);
-        const sameLineDepth = trackBraceDepth(afterBrace, 0);
+        const maskedAfterBrace = structural.substring(braceIdx);
+        const closeIdx = matchingBraceEnd(maskedAfterBrace);
 
         let onlyConsole = true;
         let hasConsole = false;
 
-        if (sameLineDepth === 0) {
-          // Single-line catch block: extract body between { and last }
-          const body = afterBrace.substring(1, afterBrace.lastIndexOf('}')).trim();
+        if (closeIdx !== -1) {
+          // Single-line catch block: body runs to the brace that closes THIS
+          // block, not to the line's last `}` (outer scopes may close after it).
+          const body = afterBrace.substring(1, closeIdx).trim();
           if (body === '') continue; // Empty, handled by no-empty-catch
           if (/^console\.(log|error|warn|info)\s*\(/.test(body)) {
             hasConsole = true;
@@ -162,11 +186,11 @@ export const errorHandlingMultilineRules: MultilineRule[] = [
           }
         } else {
           // Multi-line: scan body
-          let depth = sameLineDepth;
+          let depth = countBraces(maskedAfterBrace, 0);
           for (let j = i + 1; j < lines.length && depth > 0; j++) {
             const l = lines[j];
             const prevDepth = depth;
-            depth = trackBraceDepth(l, depth);
+            depth = countBraces(masked[j], depth);
 
             if (prevDepth > 0) {
               const trimmed = l.trim();

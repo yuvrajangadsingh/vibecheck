@@ -19,7 +19,7 @@ const DEFAULT_IGNORE = [
   '**/*.bundle.js',
 ];
 
-const DEFAULT_INCLUDE = ['**/*.{js,ts,jsx,tsx,mjs,cjs,mts,cts,py}'];
+const DEFAULT_INCLUDE = ['**/*.{js,ts,jsx,tsx,mjs,cjs,mts,cts,py,html,htm}'];
 
 const DEFAULT_CONFIG: Config = {
   rules: {},

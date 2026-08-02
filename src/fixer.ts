@@ -11,8 +11,15 @@ export type FixResult = {
 
 const fixableRuleIds = new Set(allRules.filter((r) => r.fix === 'remove-line').map((r) => r.id));
 
+// HTML findings come from extracted inline <script> bodies; their snippet is
+// the script line, but the raw file line still has the surrounding tags. A
+// remove-line fix would either fail the snippet-equality guard (a silent no-op
+// advertised as fixable) or delete the <script> tags. Until span-based fixes
+// exist, HTML findings are non-fixable.
+const isHtmlFile = (file: string) => /\.html?$/i.test(file);
+
 export function isFixable(finding: Finding): boolean {
-  return fixableRuleIds.has(finding.rule);
+  return fixableRuleIds.has(finding.rule) && !isHtmlFile(finding.file);
 }
 
 /**
