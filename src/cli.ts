@@ -1,3 +1,8 @@
+// vibecheck-disable no-console-pollution
+// This file IS the CLI's output surface: every console call below is the
+// program printing its result, not debug logging left behind. Declared here
+// rather than widening the rule to any file named cli.*, because a filename is
+// not evidence that stdout is the product. The author saying so is.
 import { Command, InvalidArgumentError, Option } from 'commander';
 import { resolve, relative, dirname } from 'node:path';
 import { existsSync, statSync } from 'node:fs';
