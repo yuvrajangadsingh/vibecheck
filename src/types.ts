@@ -16,6 +16,15 @@ export type Rule = {
   messageTemplate: string;
   multiline?: boolean;
   fix?: 'remove-line';
+  /**
+   * Match against code only, with strings and comments masked out.
+   *
+   * Set this on rules that target a code CONSTRUCT: writing "we removed the
+   * eval() call" in a comment is not calling eval. Leave it off for rules that
+   * target comment TEXT (no-ai-todo, no-ai-attribution), which must keep
+   * seeing comments to work at all.
+   */
+  codeOnly?: boolean;
 };
 
 export type MultilineRule = {

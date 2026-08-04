@@ -21,6 +21,10 @@ export const securityRules: Rule[] = [
     languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'],
     pattern: /(?<![$\w])eval\s*\(|new\s+Function\s*\(/,
     antiPattern: /eslint-disable|\/\/\s*safe|globalThis\.eval/,
+    // Writing "we removed the eval() call" in a comment is not calling eval.
+    // Without this the rule fires on its own description, and on any security
+    // doc that names the thing it warns about.
+    codeOnly: true,
     messageTemplate: 'eval() or new Function() allows arbitrary code execution.',
   },
   {
@@ -45,6 +49,7 @@ export const securityRules: Rule[] = [
     severity: 'warn',
     languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'],
     pattern: /['"`]\s*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)\b[^'"`]*?\b(?:FROM|INTO|SET|WHERE|VALUES|JOIN|TABLE|DATABASE|INDEX|COLUMN)\b[^'"`]*?(?:\$\{|['"`]\s*\+\s*\w)/i,
+    codeOnly: true,
     messageTemplate: 'SQL query built with string concatenation. Use parameterized queries.',
   },
 ];

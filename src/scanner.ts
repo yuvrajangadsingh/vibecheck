@@ -2,6 +2,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { relative, extname } from 'node:path';
 import fg from 'fast-glob';
 import { allRules, allMultilineRules } from './rules/index.js';
+import { maskLines } from './lexer.js';
 import { parseSuppressions, isSuppressed } from './suppressions.js';
 import type { Config, Finding, ScanResult, Severity } from './types.js';
 import type { DiffMap } from './diff.js';
@@ -152,11 +153,20 @@ export function scanContentDetailed(content: string, filePath: string, config: C
     (r) => enabled(r.id) && r.languages.includes(lang),
   );
 
+  // Lexer-masked copy: strings, template literals, regexes and comments
+  // blanked. Computed lazily because most files have no codeOnly findings and
+  // lexing every file up front would cost more than it saves.
+  let maskedLines: string[] | null = null;
+  const masked = () => (maskedLines ??= maskLines(lines));
+
   for (const rule of activeRules) {
     const severity = resolveSeverity(config.rules[rule.id], rule.severity);
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      const match = rule.pattern.exec(line);
+      // codeOnly rules match a code construct, so a mention of it in prose is
+      // not a finding. Reporting still quotes the real line.
+      const subject = rule.codeOnly ? masked()[i] : line;
+      const match = rule.pattern.exec(subject);
       if (!match) continue;
       if (rule.antiPattern && rule.antiPattern.test(line)) continue;
       if (rule.lineExclusions && rule.lineExclusions.test(line)) continue;
