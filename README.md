@@ -151,6 +151,59 @@ vibecheck --no-defaults --rule 'no-obvious-comments: warn' .     # exactly one r
 
 `--no-defaults` starts the run with every rule off (the config file's `rules` section is ignored too), so only rules enabled by `--rule` execute — the eslint-style opt-in model when you want it. Flag order doesn't matter; an unknown rule id or level is a usage error (exit 2) with a hint. Rules enabled at `info` still respect the `--severity` floor — add `--severity info` to see them.
 
+## Slop score
+
+```bash
+vibecheck --score .
+```
+
+```
+  slop score  68/100  (D)
+  16.5 weighted findings per 1k lines, over 360.2k lines
+
+    code-quality       12.1/KLOC   1042 findings
+    security            3.2/KLOC     47 findings
+    error-handling      1.2/KLOC     31 findings
+```
+
+One number for how much AI residue a codebase carries, with the breakdown that
+explains it. It never prints bare: a score with no categories is a vanity
+metric, and the first question anyone asks is which part is bad.
+
+**Per-KLOC, severity-weighted, capped per rule.** An error counts 10, a warning
+3, an info 1. No single rule may contribute more than 20 points per KLOC — in a
+31-repo scan `no-deep-nesting` alone produced 46% of all findings, so without a
+cap the score would mostly measure nesting depth while claiming to measure
+slop. When the cap bites, the output says so and names the rule.
+
+**50 means typical.** The curve is `100 * exp(-density * ln2 / D50)`, where
+`D50` is the median density of a calibration corpus. Above 50 is cleaner than
+the codebases measured, below is worse. Current calibration: **D50 = 30**,
+median of 6 repos (adk-python, codex, App, brandmd, gemini-cli, gitea) on ruleset 1.15.0, measured 2026-08-04. The full
+manifest ships in [`src/calibration.json`](./src/calibration.json), and you can
+re-derive it yourself:
+
+```bash
+npx tsx scripts/calibrate.ts <dir-of-repos> --write
+```
+
+That reproducibility is the point. A hand-picked constant would make every
+published score unfalsifiable.
+
+**The score describes the codebase, not your view of it.** It counts every
+finding regardless of `--severity`, so changing what you display never moves
+the number.
+
+### Gate a build on it
+
+```bash
+vibecheck --min-score 60 .
+```
+
+Exits 1 below the threshold. Sits alongside `--fail-on` and `--max-warnings`
+rather than replacing them: those catch specific findings, this catches drift
+in the whole codebase.
+
 ## Exit codes
 
 | Code | Meaning |

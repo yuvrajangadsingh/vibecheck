@@ -1,0 +1,51 @@
+{
+  "d50": 30,
+  "rulesetVersion": "1.15.0",
+  "corpusSize": 6,
+  "measured": "2026-08-04",
+  "densities": {
+    "min": 16.53,
+    "p25": 26.87,
+    "median": 30,
+    "p75": 38.92,
+    "max": 89.95
+  },
+  "repos": [
+    {
+      "repo": "adk-python",
+      "density": 16.53,
+      "kloc": 360.2,
+      "findings": 1948
+    },
+    {
+      "repo": "codex",
+      "density": 26.87,
+      "kloc": 26.3,
+      "findings": 312
+    },
+    {
+      "repo": "App",
+      "density": 28.09,
+      "kloc": 1165.7,
+      "findings": 19580
+    },
+    {
+      "repo": "brandmd",
+      "density": 31.98,
+      "kloc": 7,
+      "findings": 71
+    },
+    {
+      "repo": "gemini-cli",
+      "density": 38.92,
+      "kloc": 656.4,
+      "findings": 17260
+    },
+    {
+      "repo": "gitea",
+      "density": 89.95,
+      "kloc": 25.2,
+      "findings": 699
+    }
+  ]
+}

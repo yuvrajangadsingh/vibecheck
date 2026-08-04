@@ -58,6 +58,8 @@ export type ScanResult = {
   /** Findings silenced by inline vibecheck-disable directives. Optional for backward compat. */
   suppressed?: Finding[];
   filesScanned: number;
+  /** Non-empty lines scanned. The denominator for the per-KLOC slop score. */
+  linesScanned?: number;
   duration: number;
   summary: Record<Severity, number>;
 };

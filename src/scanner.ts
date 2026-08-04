@@ -208,6 +208,9 @@ export async function scan(targetPath: string, config: Config, diffMap?: DiffMap
   });
 
   let scannedCount = 0;
+  // Non-empty lines only: blank-line padding must not dilute a density score,
+  // or a file could improve its grade by adding whitespace.
+  let linesScanned = 0;
 
   for (const filePath of files) {
     const relPath = relative(targetPath, filePath);
@@ -235,6 +238,9 @@ export async function scan(targetPath: string, config: Config, diffMap?: DiffMap
     if (content.includes('\0')) continue;
 
     scannedCount++;
+    for (const line of content.split('\n')) {
+      if (line.trim()) linesScanned++;
+    }
 
     const fileResult = scanContentDetailed(content, relPath, config);
     for (const f of fileResult.findings) {
@@ -264,6 +270,7 @@ export async function scan(targetPath: string, config: Config, diffMap?: DiffMap
     findings,
     suppressed,
     filesScanned: scannedCount,
+    linesScanned,
     duration: performance.now() - start,
     summary,
   };

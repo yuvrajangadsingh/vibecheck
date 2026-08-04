@@ -11,6 +11,7 @@ import { scan } from './scanner.js';
 import { applyFixes } from './fixer.js';
 import { formatPretty, formatJSON, formatQuiet, formatCompact, formatGh, filterBySeverity, padRight } from './formatter.js';
 import { formatSarif } from './sarif.js';
+import { computeScore, formatScore } from './score.js';
 import { BASELINE_FILENAME, loadBaseline, writeBaseline, partitionBaseline } from './baseline.js';
 import { getGitDiff, getGitRoot, resolveDiffPaths, parseDiff } from './diff.js';
 import { allRules, allMultilineRules } from './rules/index.js';
@@ -23,6 +24,14 @@ declare const __VERSION__: string;
 const VERSION = typeof __VERSION__ !== 'undefined' ? __VERSION__ : '0.0.0-dev';
 
 type OutputFormat = 'pretty' | 'compact' | 'json' | 'quiet' | 'gh' | 'sarif';
+
+function parseMinScore(value: string): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0 || n > 100) {
+    throw new InvalidArgumentError('--min-score must be a number between 0 and 100.');
+  }
+  return n;
+}
 
 function parseMaxWarnings(value: string): number {
   const n = Number(value);
@@ -68,12 +77,14 @@ Examples:
   $ vibecheck . --format gh --fail-on warn   CI: GitHub annotations, fail on warnings
   $ vibecheck --update-baseline .            Adopt: accept current findings, fail on new ones
   $ vibecheck . --format sarif > out.sarif   SARIF 2.1.0 for GitHub code scanning
+  $ vibecheck --score .                      Slop score with a per-category breakdown
+  $ vibecheck --min-score 60 .               CI: fail when the codebase drifts below 60
   $ vibecheck --rule 'no-eval: off' .        This run only, turn one rule off
   $ vibecheck --no-defaults --rule 'no-obvious-comments: warn' .   Run exactly one rule
 
 Exit codes:
   0  clean, or no findings at or above --fail-on
-  1  findings at or above --fail-on, or --max-warnings exceeded
+  1  findings at or above --fail-on, --max-warnings exceeded, or --min-score not met
   2  usage or runtime error
 `;
 
@@ -95,6 +106,8 @@ const program = new Command()
   .option('-q, --quiet', 'Only show summary (alias for --format quiet)')
   .addOption(new Option('--fail-on <level>', 'Exit 1 when findings at or above this severity exist').choices(['error', 'warn', 'info', 'never']).default('error'))
   .option('--max-warnings <n>', 'Exit 1 when more than <n> warnings are reported', parseMaxWarnings)
+  .option('--score', 'Print the slop score with a per-category breakdown')
+  .option('--min-score <n>', 'Exit 1 when the slop score is below <n>', parseMinScore)
   .option('-d, --diff', 'Only scan lines changed in git diff (unstaged)')
   .option('--staged', 'Only scan lines changed in git diff --cached (staged)')
   .addOption(new Option('--diff-stdin', 'Only scan lines changed in a unified diff read from stdin').conflicts(['diff', 'staged']))
@@ -115,6 +128,8 @@ const program = new Command()
     quiet?: boolean;
     failOn: Severity | 'never';
     maxWarnings?: number;
+    score?: boolean;
+    minScore?: number;
     diff?: boolean;
     staged?: boolean;
     diffStdin?: boolean;
@@ -301,6 +316,24 @@ const program = new Command()
         failed = true;
       }
     }
+    // Slop score describes the CODEBASE, so it counts every finding, not the
+    // severity-filtered view. Scoring `reported` would make the number move
+    // when you change --severity, and would measure a different quantity than
+    // scripts/calibrate.ts used to derive D50 — the score and its own
+    // calibration have to agree or the constant is meaningless.
+    if (options.score || options.minScore !== undefined) {
+      const scored = computeScore(result.findings, result.linesScanned ?? 0);
+      if (options.score && options.format !== 'json' && options.format !== 'sarif') {
+        process.stderr.write('\n' + formatScore(scored) + '\n\n');
+      }
+      if (options.minScore !== undefined && scored.score < options.minScore) {
+        process.stderr.write(
+          `vibecheck: slop score ${scored.score} is below --min-score ${options.minScore}.\n`
+        );
+        failed = true;
+      }
+    }
+
     if (failed) process.exitCode = 1;
   });
 
