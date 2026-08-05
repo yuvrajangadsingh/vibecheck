@@ -206,8 +206,12 @@ That reproducibility is the point. A hand-picked constant would make every
 published score unfalsifiable.
 
 **The score describes the codebase, not your view of it.** It counts every
-finding regardless of `--severity`, so changing what you display never moves
-the number.
+finding regardless of `--severity`, and counts baselined findings too, so
+changing what you display never moves the number. Baselining is a decision to
+defer slop, not to remove it — before this was enforced, writing a baseline
+sent the score straight to 100 with no code changed, and `--min-score` could be
+passed by running `--update-baseline`. Use `--fail-on` to gate on new findings;
+that is what the baseline is for.
 
 **Not available in diff mode.** `--score`, `--min-score` and `--badge` refuse to
 run alongside `--diff`, `--staged` or `--diff-stdin`. The score is findings per
