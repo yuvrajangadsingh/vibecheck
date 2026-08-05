@@ -606,3 +606,127 @@ describe('files the scanner cannot read are never reported clean', () => {
     expect(res.status).toBe(0);
   });
 });
+
+// --staged used to build its line map from the index and then scan the WORKING
+// TREE, so a commit containing eval() passed as long as the working copy was
+// clean. That is the pre-commit hook case, which is the whole point of --staged.
+describe('--staged scans the index, not the working tree', () => {
+  function repo(): { dir: string; git: (cmd: string) => void } {
+    const dir = mkdtempSync(join(tmpdir(), 'vibecheck-cli-staged-'));
+    const git = (cmd: string) => execSync(`git ${cmd}`, { cwd: dir, stdio: 'ignore' });
+    git('init -q .');
+    git('config user.email t@t');
+    git('config user.name t');
+    return { dir, git };
+  }
+  const EVAL = 'export const a = eval(x);\n';
+  const dirs: string[] = [];
+  const fresh = () => {
+    const r = repo();
+    dirs.push(r.dir);
+    return r;
+  };
+
+  afterAll(() => {
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  it('reports a finding staged in the index when the working tree is clean', () => {
+    const { dir, git } = fresh();
+    writeFileSync(join(dir, 's.ts'), 'export const ok = 1;\n');
+    git('add s.ts');
+    git('commit -qm init');
+    writeFileSync(join(dir, 's.ts'), EVAL);
+    git('add s.ts');
+    writeFileSync(join(dir, 's.ts'), 'export const clean = 1;\n'); // working tree no longer has it
+
+    const res = run(['--staged', '--format', 'compact', '--fail-on', 'error', dir]);
+    expect(res.stdout).toContain('no-eval');
+    expect(res.status).toBe(1);
+  });
+
+  it('ignores a working-tree finding that was never staged', () => {
+    const { dir, git } = fresh();
+    writeFileSync(join(dir, 's.ts'), 'export const ok = 1;\n');
+    git('add s.ts');
+    git('commit -qm init');
+    writeFileSync(join(dir, 's.ts'), 'export const clean = 2;\n');
+    git('add s.ts');
+    writeFileSync(join(dir, 's.ts'), EVAL); // unstaged only
+
+    const res = run(['--staged', '--format', 'compact', '--fail-on', 'error', dir]);
+    expect(res.stdout).not.toContain('no-eval');
+    expect(res.status).toBe(0);
+  });
+
+  it('scans a staged file that no longer exists in the working tree', () => {
+    const { dir, git } = fresh();
+    writeFileSync(join(dir, 'base.ts'), 'export const x = 1;\n');
+    git('add base.ts');
+    git('commit -qm init');
+    writeFileSync(join(dir, 'only.ts'), EVAL);
+    git('add only.ts');
+    rmSync(join(dir, 'only.ts'));
+
+    const res = run(['--staged', '--format', 'compact', '--fail-on', 'error', dir]);
+    expect(res.stdout).toContain('no-eval');
+    expect(res.status).toBe(1);
+  });
+
+  it('handles an unborn HEAD without leaking a git fatal', () => {
+    const { dir, git } = fresh();
+    writeFileSync(join(dir, 'f.ts'), EVAL);
+    git('add f.ts');
+
+    const res = run(['--staged', '--format', 'compact', '--fail-on', 'error', dir]);
+    expect(res.stdout).toContain('no-eval');
+    expect(res.stderr).not.toContain('fatal');
+    expect(res.status).toBe(1);
+  });
+
+  it('reports the new path for a staged rename with edits', () => {
+    const { dir, git } = fresh();
+    writeFileSync(join(dir, 'old.ts'), 'export const a = 1;\nexport const b = 2;\nexport const c = 3;\n');
+    git('add old.ts');
+    git('commit -qm init');
+    git('mv old.ts new.ts');
+    writeFileSync(join(dir, 'new.ts'), 'export const a = 1;\nexport const b = 2;\nexport const c = eval(q);\n');
+    git('add new.ts');
+
+    const res = run(['--staged', '--format', 'compact', '--fail-on', 'error', dir]);
+    expect(res.stdout).toContain('new.ts');
+    expect(res.stdout).not.toContain('old.ts');
+    expect(res.status).toBe(1);
+  });
+
+  it('exits 2 rather than passing when an in-scope staged blob cannot be linted', () => {
+    const { dir, git } = fresh();
+    writeFileSync(join(dir, 'base.ts'), 'export const x = 1;\n');
+    git('add base.ts');
+    git('commit -qm init');
+    writeFileSync(join(dir, 'bin.ts'), Buffer.from('export const a = 1;\0\u0001binary', 'binary'));
+    git('add bin.ts');
+
+    const res = run(['--staged', '--fail-on', 'error', dir]);
+    expect(res.stderr).toContain('bin.ts');
+    expect(res.status).toBe(2);
+  });
+
+  it('leaves an out-of-scope staged binary alone', () => {
+    const { dir, git } = fresh();
+    writeFileSync(join(dir, 'base.ts'), 'export const x = 1;\n');
+    git('add base.ts');
+    git('commit -qm init');
+    writeFileSync(join(dir, 'img.png'), Buffer.from('\u0089PNG\0\u0001', 'binary'));
+    git('add img.png');
+
+    expect(run(['--staged', '--fail-on', 'error', dir]).status).toBe(0);
+  });
+
+  it('refuses --staged --fix', () => {
+    const { dir } = fresh();
+    const res = run(['--staged', '--fix', dir]);
+    expect(res.stderr).toContain('cannot be used with');
+    expect(res.status).toBe(2);
+  });
+});

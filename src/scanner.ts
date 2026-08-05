@@ -215,6 +215,12 @@ export type ScanOptions = {
    * a negation. Either way the file was silently skipped.
    */
   files?: string[];
+  /**
+   * Scan this content directly instead of reading anything from disk. Used by
+   * --staged, where the bytes that matter live in the index and the working
+   * tree may hold something entirely different.
+   */
+  contents?: { path: string; content: string; changedLines?: Set<number> }[];
 };
 
 export async function scan(
@@ -227,6 +233,58 @@ export async function scan(
   const findings: Finding[] = [];
   const suppressed: Finding[] = [];
 
+
+  const skipped: SkippedFile[] = [];
+  let scannedCount = 0;
+  let linesScanned = 0;
+
+  // Shared by the filesystem and content paths so a staged scan and a disk scan
+  // report identically.
+  const finish = (): ScanResult => {
+    const byFileThenLine = (a: Finding, b: Finding) => {
+      if (a.file !== b.file) return a.file.localeCompare(b.file);
+      return a.line - b.line;
+    };
+    findings.sort(byFileThenLine);
+    suppressed.sort(byFileThenLine);
+
+    const summary: Record<Severity, number> = { error: 0, warn: 0, info: 0 };
+    for (const f of findings) summary[f.severity]++;
+
+    return {
+      findings,
+      suppressed,
+      filesScanned: scannedCount,
+      linesScanned,
+      duration: performance.now() - start,
+      summary,
+      skipped,
+    };
+  };
+  // Non-empty lines only: blank-line padding must not dilute a density score,
+  // or a file could improve its grade by adding whitespace.
+
+  // Content supplied directly (staged mode): lint it and skip the filesystem
+  // entirely. Same aggregation as the disk path, different source of bytes.
+  if (options.contents) {
+    for (const item of options.contents) {
+      scannedCount++;
+      for (const line of item.content.split('\n')) {
+        if (line.trim()) linesScanned++;
+      }
+      const fileResult = scanContentDetailed(item.content, item.path, config);
+      for (const f of fileResult.findings) {
+        if (item.changedLines && !item.changedLines.has(f.line)) continue;
+        findings.push(f);
+      }
+      for (const f of fileResult.suppressed) {
+        if (item.changedLines && !item.changedLines.has(f.line)) continue;
+        suppressed.push(f);
+      }
+    }
+    return finish();
+  }
+
   const files =
     options.files ??
     (await fg(config.include, {
@@ -238,11 +296,6 @@ export async function scan(
       followSymbolicLinks: false,
     }));
 
-  const skipped: SkippedFile[] = [];
-  let scannedCount = 0;
-  // Non-empty lines only: blank-line padding must not dilute a density score,
-  // or a file could improve its grade by adding whitespace.
-  let linesScanned = 0;
 
   for (const filePath of files) {
     const relPath = relative(targetPath, filePath);
@@ -299,25 +352,5 @@ export async function scan(
     }
   }
 
-  const byFileThenLine = (a: Finding, b: Finding) => {
-    if (a.file !== b.file) return a.file.localeCompare(b.file);
-    return a.line - b.line;
-  };
-  findings.sort(byFileThenLine);
-  suppressed.sort(byFileThenLine);
-
-  const summary: Record<Severity, number> = { error: 0, warn: 0, info: 0 };
-  for (const f of findings) {
-    summary[f.severity]++;
-  }
-
-  return {
-    findings,
-    suppressed,
-    filesScanned: scannedCount,
-    linesScanned,
-    duration: performance.now() - start,
-    summary,
-    skipped,
-  };
+  return finish();
 }

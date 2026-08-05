@@ -63,10 +63,12 @@
     "commander": "^13.0.0",
     "fast-glob": "^3.3.3",
     "picocolors": "^1.1.1",
+    "picomatch": "^4.0.5",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^25.3.2",
+    "@types/picomatch": "^4.0.3",
     "tsup": "^8.0.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"

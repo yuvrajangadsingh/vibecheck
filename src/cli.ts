@@ -9,6 +9,7 @@ import { existsSync, statSync, writeFileSync } from 'node:fs';
 import { loadConfig } from './config.js';
 import { scan } from './scanner.js';
 import fg from 'fast-glob';
+import { readStagedSnapshot, type StagedSnapshot } from './staged.js';
 import { applyFixes } from './fixer.js';
 import { formatPretty, formatJSON, formatQuiet, formatCompact, formatGh, filterBySeverity, padRight } from './formatter.js';
 import { formatSarif } from './sarif.js';
@@ -137,7 +138,10 @@ const program = new Command()
   )
   .option('-d, --diff', 'Only scan lines changed in git diff (unstaged)')
   .addOption(
-    new Option('--staged', 'Only scan lines changed in git diff --cached (staged)').conflicts(['diff'])
+    new Option('--staged', 'Only scan lines changed in git diff --cached (staged)').conflicts([
+      'diff',
+      'fix',
+    ])
   )
   .addOption(new Option('--diff-stdin', 'Only scan lines changed in a unified diff read from stdin').conflicts(['diff', 'staged']))
   .option('--statistics', 'Append per-rule finding counts to the report (pretty and json)')
@@ -238,6 +242,7 @@ const program = new Command()
 
     // Diff mode: changed lines from git, or from a unified diff piped to stdin
     let diffMap: DiffMap | undefined;
+    let stagedSnapshot: StagedSnapshot | undefined;
     if (options.diffStdin) {
       if (process.stdin.isTTY) {
         console.error('Error: --diff-stdin expects a unified diff on stdin (e.g. git diff | vibecheck --diff-stdin .).');
@@ -252,10 +257,22 @@ const program = new Command()
       } catch {
         diffMap = rawMap;
       }
-    } else if (options.diff || options.staged) {
+    } else if (options.staged) {
+      // Read the INDEX, not the working tree. Those are different files, and
+      // --staged exists for the pre-commit case, which cares about the index.
+      try {
+        stagedSnapshot = readStagedSnapshot(getGitRoot(scanRoot), scanRoot, {
+          include: config.include,
+          ignore: config.ignore,
+        });
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : 'git failed'}`);
+        process.exit(2);
+      }
+    } else if (options.diff) {
       try {
         const repoRoot = getGitRoot(scanRoot);
-        const rawDiff = getGitDiff(repoRoot, !!options.staged);
+        const rawDiff = getGitDiff(repoRoot, false);
         diffMap = resolveDiffPaths(rawDiff, repoRoot, scanRoot);
       } catch (err) {
         console.error(`Error: ${err instanceof Error ? err.message : 'git diff failed'}`);
@@ -276,7 +293,15 @@ const program = new Command()
 
     let result;
     try {
-      result = await scan(scanRoot, config, diffMap, { files: explicitFiles });
+      result = stagedSnapshot
+        ? await scan(scanRoot, config, undefined, {
+            contents: stagedSnapshot.files.map((f) => ({
+              path: f.reportPath,
+              content: f.content,
+              changedLines: f.changedLines,
+            })),
+          })
+        : await scan(scanRoot, config, diffMap, { files: explicitFiles });
     } catch (err) {
       console.error(`Error: scan failed for "${targetPath}".`, err instanceof Error ? err.message : '');
       process.exit(2);
@@ -293,7 +318,15 @@ const program = new Command()
           // at the wrong ones. Shift it by what was actually removed rather
           // than reusing it, which silently dropped shifted findings.
           if (diffMap) diffMap = shiftDiffMap(diffMap, fixResult.fixedFindings);
-          result = await scan(scanRoot, config, diffMap, { files: explicitFiles });
+          result = stagedSnapshot
+        ? await scan(scanRoot, config, undefined, {
+            contents: stagedSnapshot.files.map((f) => ({
+              path: f.reportPath,
+              content: f.content,
+              changedLines: f.changedLines,
+            })),
+          })
+        : await scan(scanRoot, config, diffMap, { files: explicitFiles });
         } catch {
           // keep pre-rescan result if the second pass fails
         }
@@ -362,6 +395,18 @@ const program = new Command()
       if (result.findings.length === 0 && (result.suppressed?.length ?? 0) === 0 && (baselinedCount ?? 0) === 0 && process.stderr.isTTY) {
         process.stderr.write('  ★ If this saved you a review cycle, star the repo: https://github.com/yuvrajangadsingh/vibecheck\n\n');
       }
+    }
+
+    // A staged blob we could not lint is not a staged blob that passed. This
+    // has to fail closed, or "the only staged change is an in-scope binary"
+    // looks exactly like "nothing was staged".
+    if (stagedSnapshot && stagedSnapshot.problems.length > 0) {
+      for (const pr of stagedSnapshot.problems) {
+        process.stderr.write(
+          `vibecheck: cannot scan staged ${pr.repoPath} (${pr.reason}${pr.detail ? `: ${pr.detail}` : ''}).\n`
+        );
+      }
+      process.exit(2);
     }
 
     // A file the scanner could not read is not a file that passed. Report every
