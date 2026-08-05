@@ -17,6 +17,8 @@ const severityLabel: Record<Severity, string> = {
 const severityOrder: Severity[] = ['error', 'warn', 'info'];
 
 export type FormatOptions = {
+  /** Precomputed slop score, included in JSON when present. */
+  score?: unknown;
   statistics?: boolean;
   fixHint?: boolean;
   /** List findings silenced by inline directives (result.suppressed). */
@@ -176,6 +178,10 @@ export function formatJSON(result: ScanResult, minSeverity: Severity, opts: Form
   if (suppressed && suppressed.length > 0) payload.suppressedCount = suppressed.length;
   if (opts.showSuppressed) payload.suppressed = suppressed ?? [];
   if (opts.statistics) payload.statistics = computeStatistics(filtered);
+  // Score is opt-in so default JSON stays byte-compatible for existing
+  // consumers, and it is computed from ALL findings (not the severity-filtered
+  // view) to match what --score and the calibration measure.
+  if (opts.score) payload.score = opts.score;
   return JSON.stringify(payload, null, 2);
 }
 
