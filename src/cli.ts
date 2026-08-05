@@ -8,13 +8,15 @@ import { resolve, relative, dirname } from 'node:path';
 import { existsSync, statSync, writeFileSync } from 'node:fs';
 import { loadConfig } from './config.js';
 import { scan } from './scanner.js';
+import fg from 'fast-glob';
+import { readStagedSnapshot, type StagedSnapshot } from './staged.js';
 import { applyFixes } from './fixer.js';
 import { formatPretty, formatJSON, formatQuiet, formatCompact, formatGh, filterBySeverity, padRight } from './formatter.js';
 import { formatSarif } from './sarif.js';
 import { computeScore, formatScore } from './score.js';
 import { badgeFor } from './badge.js';
 import { BASELINE_FILENAME, loadBaseline, writeBaseline, partitionBaseline } from './baseline.js';
-import { getGitDiff, getGitRoot, resolveDiffPaths, parseDiff, shiftDiffMap} from './diff.js';
+import { getGitDiff, getGitRoot, resolveDiffPaths, parseDiff, shiftDiffMap, realpathOrSelf, parseDiffBlobs, findDiffContentMismatches} from './diff.js';
 import { allRules, allMultilineRules } from './rules/index.js';
 import type { Severity } from './types.js';
 import type { DiffMap } from './diff.js';
@@ -136,7 +138,10 @@ const program = new Command()
   )
   .option('-d, --diff', 'Only scan lines changed in git diff (unstaged)')
   .addOption(
-    new Option('--staged', 'Only scan lines changed in git diff --cached (staged)').conflicts(['diff'])
+    new Option('--staged', 'Only scan lines changed in git diff --cached (staged)').conflicts([
+      'diff',
+      'fix',
+    ])
   )
   .addOption(new Option('--diff-stdin', 'Only scan lines changed in a unified diff read from stdin').conflicts(['diff', 'staged']))
   .option('--statistics', 'Append per-rule finding counts to the report (pretty and json)')
@@ -209,6 +214,8 @@ const program = new Command()
 
     // Determine scan root
     let scanRoot = resolvedPath;
+    let explicitFile: string | undefined;
+    let explicitFiles: string[] | undefined;
     let stat;
     try {
       stat = statSync(resolvedPath);
@@ -218,15 +225,24 @@ const program = new Command()
     }
 
     if (stat.isFile()) {
-      // For single file, scan its parent dir and include only the filename
-      scanRoot = dirname(resolvedPath);
-      config.include = [relative(scanRoot, resolvedPath)];
+      // For single file, scan its parent dir and include only the filename.
+      //
+      // realpath first: file discovery does not follow symlinks, so naming a
+      // symlinked file directly matched nothing and reported a silent clean.
+      // escapePath second: the filename becomes a glob pattern here, so a
+      // leading '!' read as a negation and a backslash as an escape, and the
+      // file was skipped without a word.
+      const realFile = realpathOrSelf(resolvedPath);
+      scanRoot = dirname(realFile);
+      explicitFile = relative(scanRoot, realFile);
+      explicitFiles = [realFile];
     }
 
     const format: OutputFormat = options.format ?? (options.json ? 'json' : options.quiet ? 'quiet' : 'pretty');
 
     // Diff mode: changed lines from git, or from a unified diff piped to stdin
     let diffMap: DiffMap | undefined;
+    let stagedSnapshot: StagedSnapshot | undefined;
     if (options.diffStdin) {
       if (process.stdin.isTTY) {
         console.error('Error: --diff-stdin expects a unified diff on stdin (e.g. git diff | vibecheck --diff-stdin .).');
@@ -235,16 +251,74 @@ const program = new Command()
       // Diff paths are repo-root-relative (git diff, gh pr diff). Resolve them
       // against the scan root like --diff does, so scanning a subdirectory
       // still matches. Outside a git repo, treat them as scan-root-relative.
-      const rawMap = parseDiff(await readStdin());
-      try {
-        diffMap = resolveDiffPaths(rawMap, getGitRoot(scanRoot), scanRoot);
-      } catch {
-        diffMap = rawMap;
-      }
-    } else if (options.diff || options.staged) {
+      const rawDiffText = await readStdin();
+      const rawMap = parseDiff(rawDiffText);
       try {
         const repoRoot = getGitRoot(scanRoot);
-        const rawDiff = getGitDiff(repoRoot, !!options.staged);
+        diffMap = resolveDiffPaths(rawMap, repoRoot, scanRoot);
+
+        // The diff supplies line numbers; the checkout supplies the bytes.
+        // Nothing guaranteed they described the same content, and for the
+        // documented `gh pr diff 42 | vibecheck --diff-stdin .` case they
+        // usually do not. Findings then get looked for at line numbers that
+        // mean nothing in the scanned file, which reads as a clean pass.
+        const { blobs, multiPatch } = parseDiffBlobs(rawDiffText);
+        if (multiPatch.size > 0) {
+          console.error(
+            `Error: this diff contains multiple patches for ${[...multiPatch].join(', ')}.`
+          );
+          console.error('Its line numbers describe intermediate states that never exist on disk, so no single checkout can match it.');
+          console.error('Pipe a single combined diff instead (git diff <base>..<head>).');
+          process.exit(2);
+        }
+        if (blobs.size > 0) {
+          const mismatched = findDiffContentMismatches(blobs, repoRoot, scanRoot);
+          if (mismatched.length > 0) {
+            console.error(
+              `Error: the working copy does not match the diff for ${mismatched.length} file${mismatched.length === 1 ? '' : 's'}:`
+            );
+            for (const f of mismatched.slice(0, 10)) console.error(`  ${f}`);
+            if (mismatched.length > 10) console.error(`  ...and ${mismatched.length - 10} more`);
+            console.error('Line numbers from that diff do not describe these files, so any result would be meaningless.');
+            console.error('Check out the revision the diff was generated from, or pipe a diff of your working tree.');
+            process.exit(2);
+          }
+        } else {
+          process.stderr.write(
+            'vibecheck: this diff carries no index lines, so vibecheck cannot confirm it matches your checkout.\n'
+          );
+        }
+      } catch {
+        // Outside a git repository the blob hashes cannot be checked at all.
+        // Silently falling through meant an indexed diff skipped verification
+        // entirely, which is the case most likely to be piped from elsewhere.
+        diffMap = rawMap;
+        if (/^index [0-9a-f]+\.\.[0-9a-f]+/m.test(rawDiffText)) {
+          process.stderr.write(
+            'vibecheck: not a git repository, so this diff cannot be checked against the files being scanned.\n'
+          );
+        }
+      }
+    } else if (options.staged) {
+      // Read the INDEX, not the working tree. Those are different files, and
+      // --staged exists for the pre-commit case, which cares about the index.
+      try {
+        stagedSnapshot = readStagedSnapshot(getGitRoot(scanRoot), scanRoot, {
+          include: config.include,
+          ignore: config.ignore,
+          // Naming a file means "tell me about THIS file". Without it, staged
+          // mode scanned every staged sibling instead, and a named dotfile or
+          // config-ignored file was dropped by the scope patterns.
+          only: explicitFile,
+        });
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : 'git failed'}`);
+        process.exit(2);
+      }
+    } else if (options.diff) {
+      try {
+        const repoRoot = getGitRoot(scanRoot);
+        const rawDiff = getGitDiff(repoRoot, false);
         diffMap = resolveDiffPaths(rawDiff, repoRoot, scanRoot);
       } catch (err) {
         console.error(`Error: ${err instanceof Error ? err.message : 'git diff failed'}`);
@@ -265,7 +339,15 @@ const program = new Command()
 
     let result;
     try {
-      result = await scan(scanRoot, config, diffMap);
+      result = stagedSnapshot
+        ? await scan(scanRoot, config, undefined, {
+            contents: stagedSnapshot.files.map((f) => ({
+              path: f.reportPath,
+              content: f.content,
+              changedLines: f.changedLines,
+            })),
+          })
+        : await scan(scanRoot, config, diffMap, { files: explicitFiles });
     } catch (err) {
       console.error(`Error: scan failed for "${targetPath}".`, err instanceof Error ? err.message : '');
       process.exit(2);
@@ -282,7 +364,15 @@ const program = new Command()
           // at the wrong ones. Shift it by what was actually removed rather
           // than reusing it, which silently dropped shifted findings.
           if (diffMap) diffMap = shiftDiffMap(diffMap, fixResult.fixedFindings);
-          result = await scan(scanRoot, config, diffMap);
+          result = stagedSnapshot
+        ? await scan(scanRoot, config, undefined, {
+            contents: stagedSnapshot.files.map((f) => ({
+              path: f.reportPath,
+              content: f.content,
+              changedLines: f.changedLines,
+            })),
+          })
+        : await scan(scanRoot, config, diffMap, { files: explicitFiles });
         } catch {
           // keep pre-rescan result if the second pass fails
         }
@@ -351,6 +441,44 @@ const program = new Command()
       if (result.findings.length === 0 && (result.suppressed?.length ?? 0) === 0 && (baselinedCount ?? 0) === 0 && process.stderr.isTTY) {
         process.stderr.write('  ★ If this saved you a review cycle, star the repo: https://github.com/yuvrajangadsingh/vibecheck\n\n');
       }
+    }
+
+    // A staged blob we could not lint is not a staged blob that passed. This
+    // has to fail closed, or "the only staged change is an in-scope binary"
+    // looks exactly like "nothing was staged".
+    if (stagedSnapshot && stagedSnapshot.problems.length > 0) {
+      for (const pr of stagedSnapshot.problems) {
+        process.stderr.write(
+          `vibecheck: cannot scan staged ${pr.repoPath} (${pr.reason}${pr.detail ? `: ${pr.detail}` : ''}).\n`
+        );
+      }
+      process.exit(2);
+    }
+
+    // A file the scanner could not read is not a file that passed. Report every
+    // skip, and fail closed when the user named the file explicitly — they
+    // asked about that file and deserve an answer, not silence.
+    const skipped = result.skipped ?? [];
+    if (skipped.length > 0) {
+      const label: Record<string, string> = {
+        'too-large': 'too large',
+        unreadable: 'unreadable',
+        binary: 'binary',
+      };
+      for (const sk of skipped) {
+        process.stderr.write(
+          `vibecheck: skipped ${sk.file} (${label[sk.reason] ?? sk.reason}${sk.detail ? `: ${sk.detail}` : ''}).\n`
+        );
+      }
+      // Exit 2 in every mode, not just for an explicitly named file. A
+      // directory scan that skipped a file still printed "No issues found" and
+      // exited 0, which is the same false clean this release exists to remove.
+      // Files you meant to skip belong in `ignore`, which is silent by design.
+      process.stderr.write(
+        `vibecheck: ${skipped.length} file${skipped.length === 1 ? '' : 's'} could not be scanned, so this run cannot vouch for the codebase.\n`
+      );
+      process.stderr.write('vibecheck: add them to "ignore" in your config if that is intentional.\n');
+      process.exit(2);
     }
 
     // Exit code: 1 when findings at or above --fail-on exist, or --max-warnings is exceeded.

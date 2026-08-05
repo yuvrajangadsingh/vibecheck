@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -542,5 +542,254 @@ describe('slop score integrity', () => {
     expect(res.stderr).toContain('slop score');
     expect(() => JSON.parse(res.stdout)).not.toThrow();
     expect(JSON.parse(res.stdout).version).toBe('2.1.0');
+  });
+});
+
+// The scanner used to treat "could not read it" and "read it and it is fine"
+// as the same outcome, so every case here exited 0 on a file containing eval().
+describe('files the scanner cannot read are never reported clean', () => {
+  let dir: string;
+  const EVAL = 'export const a = eval(x);\n';
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'vibecheck-cli-skip-'));
+    writeFileSync(join(dir, 'real.ts'), EVAL);
+    symlinkSync('real.ts', join(dir, 'link.ts'));
+    writeFileSync(join(dir, 'locked.ts'), EVAL);
+    writeFileSync(join(dir, 'over.ts'), EVAL + '// pad\n'.repeat(143_000));
+    writeFileSync(join(dir, '!bang.ts'), EVAL);
+    writeFileSync(join(dir, 'back\\slash.ts'), EVAL);
+  });
+
+  afterAll(() => {
+    chmodSync(join(dir, 'locked.ts'), 0o644);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('follows an explicitly named symlinked file', () => {
+    const res = run(['--format', 'compact', '--fail-on', 'error', join(dir, 'link.ts')]);
+    expect(res.stdout).toContain('no-eval');
+    expect(res.status).toBe(1);
+  });
+
+  it('does not glob-interpret a filename with a leading bang', () => {
+    const res = run(['--format', 'compact', '--fail-on', 'error', join(dir, '!bang.ts')]);
+    expect(res.stdout).toContain('no-eval');
+    expect(res.status).toBe(1);
+  });
+
+  it('does not glob-interpret a backslash in a filename', () => {
+    const res = run(['--format', 'compact', '--fail-on', 'error', join(dir, 'back\\slash.ts')]);
+    expect(res.stdout).toContain('no-eval');
+    expect(res.status).toBe(1);
+  });
+
+  it('exits 2 and says why when an explicitly named file is unreadable', () => {
+    chmodSync(join(dir, 'locked.ts'), 0o000);
+    const res = run(['--format', 'compact', '--fail-on', 'error', join(dir, 'locked.ts')]);
+    chmodSync(join(dir, 'locked.ts'), 0o644);
+    expect(res.stderr).toContain('skipped locked.ts');
+    expect(res.stderr).toContain('unreadable');
+    expect(res.status).toBe(2);
+  });
+
+  it('exits 2 and says why when an explicitly named file is over the size cap', () => {
+    const res = run(['--format', 'compact', '--fail-on', 'error', join(dir, 'over.ts')]);
+    expect(res.stderr).toContain('skipped over.ts');
+    expect(res.stderr).toContain('too large');
+    expect(res.status).toBe(2);
+  });
+
+  // A directory scan used to print "No issues found" and exit 0 after skipping
+  // a file, which is the same false clean as never looking. Deliberate skips
+  // belong in `ignore`, which stays silent.
+  it('fails a directory scan that skipped a file rather than claiming clean', () => {
+    const res = run(['--format', 'compact', '--fail-on', 'never', dir]);
+    expect(res.stderr).toContain('skipped over.ts');
+    expect(res.stderr).toContain('cannot vouch');
+    expect(res.status).toBe(2);
+  });
+
+  it('stays silent for a file excluded through ignore', () => {
+    const cfg = join(dir, '.vibecheckrc');
+    // back\\slash.ts is included because file DISCOVERY mangles it: fast-glob
+    // reports it as back/slash.ts, which does not exist, so a directory scan
+    // legitimately cannot read it. Naming it directly still works.
+    writeFileSync(cfg, JSON.stringify({ ignore: ['over.ts', 'locked.ts', 'back*'] }));
+    const res = run(['--format', 'compact', '--fail-on', 'never', '.'], { cwd: dir });
+    rmSync(cfg);
+    expect(res.stderr).not.toContain('skipped');
+    expect(res.status).toBe(0);
+  });
+});
+
+// --staged used to build its line map from the index and then scan the WORKING
+// TREE, so a commit containing eval() passed as long as the working copy was
+// clean. That is the pre-commit hook case, which is the whole point of --staged.
+describe('--staged scans the index, not the working tree', () => {
+  function repo(): { dir: string; git: (cmd: string) => void } {
+    const dir = mkdtempSync(join(tmpdir(), 'vibecheck-cli-staged-'));
+    const git = (cmd: string) => execSync(`git ${cmd}`, { cwd: dir, stdio: 'ignore' });
+    git('init -q .');
+    git('config user.email t@t');
+    git('config user.name t');
+    return { dir, git };
+  }
+  const EVAL = 'export const a = eval(x);\n';
+  const dirs: string[] = [];
+  const fresh = () => {
+    const r = repo();
+    dirs.push(r.dir);
+    return r;
+  };
+
+  afterAll(() => {
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  it('reports a finding staged in the index when the working tree is clean', () => {
+    const { dir, git } = fresh();
+    writeFileSync(join(dir, 's.ts'), 'export const ok = 1;\n');
+    git('add s.ts');
+    git('commit -qm init');
+    writeFileSync(join(dir, 's.ts'), EVAL);
+    git('add s.ts');
+    writeFileSync(join(dir, 's.ts'), 'export const clean = 1;\n'); // working tree no longer has it
+
+    const res = run(['--staged', '--format', 'compact', '--fail-on', 'error', dir]);
+    expect(res.stdout).toContain('no-eval');
+    expect(res.status).toBe(1);
+  });
+
+  it('ignores a working-tree finding that was never staged', () => {
+    const { dir, git } = fresh();
+    writeFileSync(join(dir, 's.ts'), 'export const ok = 1;\n');
+    git('add s.ts');
+    git('commit -qm init');
+    writeFileSync(join(dir, 's.ts'), 'export const clean = 2;\n');
+    git('add s.ts');
+    writeFileSync(join(dir, 's.ts'), EVAL); // unstaged only
+
+    const res = run(['--staged', '--format', 'compact', '--fail-on', 'error', dir]);
+    expect(res.stdout).not.toContain('no-eval');
+    expect(res.status).toBe(0);
+  });
+
+  it('scans a staged file that no longer exists in the working tree', () => {
+    const { dir, git } = fresh();
+    writeFileSync(join(dir, 'base.ts'), 'export const x = 1;\n');
+    git('add base.ts');
+    git('commit -qm init');
+    writeFileSync(join(dir, 'only.ts'), EVAL);
+    git('add only.ts');
+    rmSync(join(dir, 'only.ts'));
+
+    const res = run(['--staged', '--format', 'compact', '--fail-on', 'error', dir]);
+    expect(res.stdout).toContain('no-eval');
+    expect(res.status).toBe(1);
+  });
+
+  it('handles an unborn HEAD without leaking a git fatal', () => {
+    const { dir, git } = fresh();
+    writeFileSync(join(dir, 'f.ts'), EVAL);
+    git('add f.ts');
+
+    const res = run(['--staged', '--format', 'compact', '--fail-on', 'error', dir]);
+    expect(res.stdout).toContain('no-eval');
+    expect(res.stderr).not.toContain('fatal');
+    expect(res.status).toBe(1);
+  });
+
+  it('reports the new path for a staged rename with edits', () => {
+    const { dir, git } = fresh();
+    writeFileSync(join(dir, 'old.ts'), 'export const a = 1;\nexport const b = 2;\nexport const c = 3;\n');
+    git('add old.ts');
+    git('commit -qm init');
+    git('mv old.ts new.ts');
+    writeFileSync(join(dir, 'new.ts'), 'export const a = 1;\nexport const b = 2;\nexport const c = eval(q);\n');
+    git('add new.ts');
+
+    const res = run(['--staged', '--format', 'compact', '--fail-on', 'error', dir]);
+    expect(res.stdout).toContain('new.ts');
+    expect(res.stdout).not.toContain('old.ts');
+    expect(res.status).toBe(1);
+  });
+
+  it('exits 2 rather than passing when an in-scope staged blob cannot be linted', () => {
+    const { dir, git } = fresh();
+    writeFileSync(join(dir, 'base.ts'), 'export const x = 1;\n');
+    git('add base.ts');
+    git('commit -qm init');
+    writeFileSync(join(dir, 'bin.ts'), Buffer.from('export const a = 1;\0\u0001binary', 'binary'));
+    git('add bin.ts');
+
+    const res = run(['--staged', '--fail-on', 'error', dir]);
+    expect(res.stderr).toContain('bin.ts');
+    expect(res.status).toBe(2);
+  });
+
+  it('leaves an out-of-scope staged binary alone', () => {
+    const { dir, git } = fresh();
+    writeFileSync(join(dir, 'base.ts'), 'export const x = 1;\n');
+    git('add base.ts');
+    git('commit -qm init');
+    writeFileSync(join(dir, 'img.png'), Buffer.from('\u0089PNG\0\u0001', 'binary'));
+    git('add img.png');
+
+    expect(run(['--staged', '--fail-on', 'error', dir]).status).toBe(0);
+  });
+
+  it('refuses --staged --fix', () => {
+    const { dir } = fresh();
+    const res = run(['--staged', '--fix', dir]);
+    expect(res.stderr).toContain('cannot be used with');
+    expect(res.status).toBe(2);
+  });
+});
+
+// --diff-stdin took line numbers from the piped diff and bytes from the
+// checkout, without ever checking the two described the same content. For the
+// documented `gh pr diff 42 | vibecheck --diff-stdin .` case they usually do
+// not, and findings then get looked for at meaningless line numbers.
+describe('--diff-stdin verifies the checkout matches the diff', () => {
+  let dir: string;
+  let diff: string;
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'vibecheck-cli-stdin-'));
+    const git = (cmd: string) => execSync(`git ${cmd}`, { cwd: dir, stdio: 'ignore' });
+    git('init -q .');
+    git('config user.email t@t');
+    git('config user.name t');
+    writeFileSync(join(dir, 'f.ts'), 'export const a = 1;\n');
+    git('add f.ts');
+    git('commit -qm init');
+    writeFileSync(join(dir, 'f.ts'), 'export const a = 1;\nexport const b = eval(x);\n');
+    diff = execSync('git diff', { cwd: dir, encoding: 'utf-8' });
+  });
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('scans normally when the checkout matches', () => {
+    const res = run(['--diff-stdin', '--format', 'compact', '--fail-on', 'error', dir], { input: diff });
+    expect(res.stdout).toContain('no-eval');
+    expect(res.status).toBe(1);
+  });
+
+  it('exits 2 rather than reporting against a checkout the diff does not describe', () => {
+    writeFileSync(join(dir, 'f.ts'), 'export const totally = "different";\nexport const c = 2;\n');
+    const res = run(['--diff-stdin', '--format', 'compact', '--fail-on', 'error', dir], { input: diff });
+    expect(res.stderr).toContain('does not match the diff');
+    expect(res.stderr).toContain('f.ts');
+    expect(res.status).toBe(2);
+  });
+
+  it('warns instead of pretending to verify when the diff has no index lines', () => {
+    const bare = '--- a/f.ts\n+++ b/f.ts\n@@ -1,0 +2 @@\n+export const b = eval(x);\n';
+    const res = run(['--diff-stdin', '--fail-on', 'never', dir], { input: bare });
+    expect(res.stderr).toContain('cannot confirm');
+    expect(res.status).toBe(0);
   });
 });

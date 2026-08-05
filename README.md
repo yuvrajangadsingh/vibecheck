@@ -213,6 +213,32 @@ sent the score straight to 100 with no code changed, and `--min-score` could be
 passed by running `--update-baseline`. Use `--fail-on` to gate on new findings;
 that is what the baseline is for.
 
+### What diff mode can and cannot see
+
+`--staged` reads the **index**, not the working tree, so a file staged and then
+edited is checked as it will be committed. `--diff-stdin` verifies the piped
+diff describes the files being scanned, using the blob hashes in its `index`
+headers, and refuses to report against a checkout the diff does not match.
+
+A file the scanner cannot read is never reported as clean. Unreadable files,
+files over the 1MB cap, and staged blobs that are binary, symlinks or
+submodules exit 2 with the path named. Files you mean to skip belong in
+`ignore`, which stays silent.
+
+Known limitations, all needing non-default git configuration:
+
+- A `.gitattributes` **clean filter** shifts `--diff` line numbers, because git
+  describes filtered content while the working tree holds the original.
+  `--staged` is unaffected.
+- A diff from **another repository** whose `index` hashes are shorter than 7
+  characters cannot be verified, and is scanned unverified.
+- Explicitly **naming a staged symlink** scans what it points at. A directory
+  scan refuses it.
+- A stream that **modifies then deletes** the same file is not refused the way
+  other multi-patch streams are.
+- Diff mode reports findings on **changed lines**. A multiline finding whose
+  anchor line did not change is not reported, even when your edit created it.
+
 **Not available in diff mode.** `--score`, `--min-score` and `--badge` refuse to
 run alongside `--diff`, `--staged` or `--diff-stdin`. The score is findings per
 KLOC of a whole codebase; in diff mode only changed lines are scanned and the
