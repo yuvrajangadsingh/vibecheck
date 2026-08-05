@@ -262,7 +262,15 @@ const program = new Command()
         // documented `gh pr diff 42 | vibecheck --diff-stdin .` case they
         // usually do not. Findings then get looked for at line numbers that
         // mean nothing in the scanned file, which reads as a clean pass.
-        const blobs = parseDiffBlobs(rawDiffText);
+        const { blobs, multiPatch } = parseDiffBlobs(rawDiffText);
+        if (multiPatch.size > 0) {
+          console.error(
+            `Error: this diff contains multiple patches for ${[...multiPatch].join(', ')}.`
+          );
+          console.error('Its line numbers describe intermediate states that never exist on disk, so no single checkout can match it.');
+          console.error('Pipe a single combined diff instead (git diff <base>..<head>).');
+          process.exit(2);
+        }
         if (blobs.size > 0) {
           const mismatched = findDiffContentMismatches(blobs, repoRoot, scanRoot);
           if (mismatched.length > 0) {
@@ -290,6 +298,10 @@ const program = new Command()
         stagedSnapshot = readStagedSnapshot(getGitRoot(scanRoot), scanRoot, {
           include: config.include,
           ignore: config.ignore,
+          // Naming a file means "tell me about THIS file". Without it, staged
+          // mode scanned every staged sibling instead, and a named dotfile or
+          // config-ignored file was dropped by the scope patterns.
+          only: explicitFile,
         });
       } catch (err) {
         console.error(`Error: ${err instanceof Error ? err.message : 'git failed'}`);
@@ -450,10 +462,15 @@ const program = new Command()
           `vibecheck: skipped ${sk.file} (${label[sk.reason] ?? sk.reason}${sk.detail ? `: ${sk.detail}` : ''}).\n`
         );
       }
-      if (explicitFile && skipped.some((sk) => sk.file === explicitFile)) {
-        process.stderr.write('vibecheck: the requested file was not scanned, so this is not a pass.\n');
-        process.exit(2);
-      }
+      // Exit 2 in every mode, not just for an explicitly named file. A
+      // directory scan that skipped a file still printed "No issues found" and
+      // exited 0, which is the same false clean this release exists to remove.
+      // Files you meant to skip belong in `ignore`, which is silent by design.
+      process.stderr.write(
+        `vibecheck: ${skipped.length} file${skipped.length === 1 ? '' : 's'} could not be scanned, so this run cannot vouch for the codebase.\n`
+      );
+      process.stderr.write('vibecheck: add them to "ignore" in your config if that is intentional.\n');
+      process.exit(2);
     }
 
     // Exit code: 1 when findings at or above --fail-on exist, or --max-warnings is exceeded.

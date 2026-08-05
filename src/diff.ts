@@ -134,7 +134,24 @@ export function parseDiff(diffOutput: string): DiffMap {
  * @param staged - if true, use --cached (staged changes only)
  */
 export function getGitDiff(cwd: string, staged: boolean): DiffMap {
-  const args = staged ? ['diff', '--cached', '-U0'] : ['diff', '-U0'];
+  // Same reasoning as staged mode: user git config and .gitattributes must not
+  // be able to change the bytes we parse or hide a file from the line map.
+  const stable = [
+    '-c', 'core.quotePath=false',
+    '-c', 'diff.noprefix=false',
+    '-c', 'color.diff=never',
+  ];
+  const args = [
+    ...stable,
+    'diff',
+    ...(staged ? ['--cached'] : []),
+    '-U0',
+    '--text',
+    '--no-textconv',
+    // --no-ext-diff, not `-c diff.external=`: an empty value is a command git
+    // tries to execute, which fails with "cannot run : No such file".
+    '--no-ext-diff',
+  ];
 
   try {
     const output = execFileSync('git', args, {
@@ -245,11 +262,19 @@ export function shiftDiffMap(map: DiffMap, removed: { file: string; line: number
  *
  * Hashes are abbreviated in the header, so callers compare by prefix.
  */
-export function parseDiffBlobs(diff: string): Map<string, string> {
+export function parseDiffBlobs(diff: string): {
+  blobs: Map<string, string>;
+  /** Paths described by more than one patch in the stream. */
+  multiPatch: Set<string>;
+} {
   const blobs = new Map<string, string>();
+  const multiPatch = new Set<string>();
   let pending: string | undefined;
 
-  for (const line of diff.split('\n')) {
+  // \r is stripped the same way parseDiff strips it. Without this a CRLF diff
+  // yielded the path "f.ts\r", which hashes to nothing and was quietly dropped,
+  // skipping verification entirely.
+  for (const line of diff.split('\n').map((l) => l.replace(/\r$/, ''))) {
     if (line.startsWith('index ')) {
       const m = /^index ([0-9a-f]+)\.\.([0-9a-f]+)/.exec(line);
       pending = m?.[2];
@@ -257,12 +282,20 @@ export function parseDiffBlobs(diff: string): Map<string, string> {
     }
     if (line.startsWith('+++ ')) {
       const path = parseHeaderPath(line);
-      if (path && pending) blobs.set(path, pending);
+      if (path && pending) {
+        // A multi-commit stream (git format-patch of several commits) touches
+        // the same file more than once. The changed lines get unioned across
+        // patches while only one blob can be checked, so the intermediate line
+        // numbers describe content that never exists on disk. Record it and let
+        // the caller refuse rather than verify the last hash and call it done.
+        if (blobs.has(path) && blobs.get(path) !== pending) multiPatch.add(path);
+        blobs.set(path, pending);
+      }
       pending = undefined;
     }
   }
 
-  return blobs;
+  return { blobs, multiPatch };
 }
 
 /**
@@ -297,7 +330,25 @@ export function findDiffContentMismatches(
       continue; // not in the checkout; nothing to scan
     }
 
-    if (!actual.startsWith(expected)) mismatched.push(relPath);
+    // Expand the abbreviated hash through git rather than comparing prefixes.
+    // core.abbrev can legitimately be as short as 4, and a 4-character prefix
+    // is easy to collide, which let mismatched content pass verification.
+    let expectedFull = expected;
+    try {
+      expectedFull = execFileSync('git', ['rev-parse', `${expected}^{object}`], {
+        cwd: realRepoRoot,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+    } catch {
+      // Object not present locally (a diff from elsewhere). Prefix-compare, but
+      // only when the prefix is long enough to mean something.
+      if (expected.length < 7) continue;
+      if (!actual.startsWith(expected)) mismatched.push(relPath);
+      continue;
+    }
+
+    if (actual !== expectedFull) mismatched.push(relPath);
   }
 
   return mismatched;

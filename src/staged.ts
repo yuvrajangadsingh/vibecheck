@@ -27,8 +27,20 @@ import { parseDiff, realpathOrSelf, type DiffMap } from './diff.js';
 
 const MAX_BLOB_SIZE = 1_000_000;
 
-/** Git's empty tree, used as the base when HEAD does not exist yet. */
-const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+/**
+ * Git's empty tree, used as the base when HEAD does not exist yet.
+ *
+ * Asked of git rather than hardcoded: the well-known constant is the SHA-1
+ * value, and a repository created with --object-format=sha256 has a different
+ * one, which made staged scans of an unborn sha256 repo die on an ambiguous
+ * argument.
+ */
+function emptyTree(repoRoot: string): string {
+  return execFileSync('git', ['hash-object', '-t', 'tree', '/dev/null'], {
+    cwd: repoRoot,
+    encoding: 'utf-8',
+  }).trim();
+}
 
 export type StagedFile = {
   /** Repository-root-relative, as git reports it. */
@@ -69,10 +81,18 @@ const STABLE_DIFF = [
   '-c',
   'diff.noprefix=false',
   '-c',
-  'diff.external=',
-  '-c',
   'color.diff=never',
 ];
+
+/**
+ * Force a real text diff.
+ *
+ * `.gitattributes` can mark a perfectly ordinary source file as `binary`, and a
+ * textconv filter can make the patch describe transformed content while the
+ * blob we lint holds the original. Either way the line map stopped matching the
+ * bytes, and the file went unscanned without a word.
+ */
+const FORCE_TEXT = ['--text', '--no-textconv', '--no-ext-diff'];
 
 /**
  * Snapshot the index and return the staged content of every changed file that
@@ -84,7 +104,7 @@ const STABLE_DIFF = [
 export function readStagedSnapshot(
   repoRoot: string,
   scanRoot: string,
-  scope: { include: string[]; ignore: string[] }
+  scope: { include: string[]; ignore: string[]; only?: string }
 ): StagedSnapshot {
   // Scope has to be decided from the PATH, before any content is read. A
   // staged binary produces no changed lines, so a "no changed lines, skip"
@@ -113,7 +133,7 @@ export function readStagedSnapshot(
 
   // 2. Resolve the base. An unborn HEAD (no commits yet) diffs against the
   //    empty tree so the first commit is still checked.
-  let baseTree = EMPTY_TREE;
+  let baseTree = emptyTree(repoRoot);
   try {
     // stderr silenced: an unborn HEAD is an ordinary first-commit case, not
     // something to spray git's "ambiguous argument" fatal at the user over.
@@ -123,11 +143,11 @@ export function readStagedSnapshot(
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
   } catch {
-    baseTree = EMPTY_TREE;
+    baseTree = emptyTree(repoRoot);
   }
 
   // 3. Line map and file metadata come from the SAME pair of immutable trees.
-  const patch = git(repoRoot, [...STABLE_DIFF, 'diff-tree', '-U0', '-r', '-M', baseTree, indexTree]);
+  const patch = git(repoRoot, [...STABLE_DIFF, 'diff-tree', '-U0', '-r', '-M', ...FORCE_TEXT, baseTree, indexTree]);
   const lineMap = parseDiff(patch);
 
   const raw = git(repoRoot, [...STABLE_DIFF, 'diff-tree', '-r', '-M', '--raw', '-z', baseTree, indexTree]);
@@ -144,8 +164,13 @@ export function readStagedSnapshot(
     const reportPath = relative(realScanRoot, `${realRepoRoot}/${entry.path}`);
     if (reportPath === '..' || reportPath.startsWith('../')) continue;
 
-    // Out of scope by config: a staged .png is not a scan failure.
-    if (!inScope(reportPath.split('\\').join('/'))) continue;
+    // An explicitly named file wins over the config patterns: the user asked
+    // about that file, including when it is a dotfile or normally ignored.
+    if (scope.only !== undefined) {
+      if (reportPath !== scope.only) continue;
+    } else if (!inScope(reportPath.split('\\').join('/'))) {
+      continue; // out of scope by config: a staged .png is not a scan failure
+    }
 
     // A staged symlink or gitlink is not source text. Linting the target path
     // as if it were code would be nonsense, and skipping it quietly is the bug.

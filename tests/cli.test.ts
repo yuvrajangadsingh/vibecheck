@@ -600,9 +600,25 @@ describe('files the scanner cannot read are never reported clean', () => {
     expect(res.status).toBe(2);
   });
 
-  it('reports a skip during a directory scan without failing the run', () => {
+  // A directory scan used to print "No issues found" and exit 0 after skipping
+  // a file, which is the same false clean as never looking. Deliberate skips
+  // belong in `ignore`, which stays silent.
+  it('fails a directory scan that skipped a file rather than claiming clean', () => {
     const res = run(['--format', 'compact', '--fail-on', 'never', dir]);
     expect(res.stderr).toContain('skipped over.ts');
+    expect(res.stderr).toContain('cannot vouch');
+    expect(res.status).toBe(2);
+  });
+
+  it('stays silent for a file excluded through ignore', () => {
+    const cfg = join(dir, '.vibecheckrc');
+    // back\\slash.ts is included because file DISCOVERY mangles it: fast-glob
+    // reports it as back/slash.ts, which does not exist, so a directory scan
+    // legitimately cannot read it. Naming it directly still works.
+    writeFileSync(cfg, JSON.stringify({ ignore: ['over.ts', 'locked.ts', 'back*'] }));
+    const res = run(['--format', 'compact', '--fail-on', 'never', '.'], { cwd: dir });
+    rmSync(cfg);
+    expect(res.stderr).not.toContain('skipped');
     expect(res.status).toBe(0);
   });
 });
