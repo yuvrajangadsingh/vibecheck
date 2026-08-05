@@ -730,3 +730,50 @@ describe('--staged scans the index, not the working tree', () => {
     expect(res.status).toBe(2);
   });
 });
+
+// --diff-stdin took line numbers from the piped diff and bytes from the
+// checkout, without ever checking the two described the same content. For the
+// documented `gh pr diff 42 | vibecheck --diff-stdin .` case they usually do
+// not, and findings then get looked for at meaningless line numbers.
+describe('--diff-stdin verifies the checkout matches the diff', () => {
+  let dir: string;
+  let diff: string;
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'vibecheck-cli-stdin-'));
+    const git = (cmd: string) => execSync(`git ${cmd}`, { cwd: dir, stdio: 'ignore' });
+    git('init -q .');
+    git('config user.email t@t');
+    git('config user.name t');
+    writeFileSync(join(dir, 'f.ts'), 'export const a = 1;\n');
+    git('add f.ts');
+    git('commit -qm init');
+    writeFileSync(join(dir, 'f.ts'), 'export const a = 1;\nexport const b = eval(x);\n');
+    diff = execSync('git diff', { cwd: dir, encoding: 'utf-8' });
+  });
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('scans normally when the checkout matches', () => {
+    const res = run(['--diff-stdin', '--format', 'compact', '--fail-on', 'error', dir], { input: diff });
+    expect(res.stdout).toContain('no-eval');
+    expect(res.status).toBe(1);
+  });
+
+  it('exits 2 rather than reporting against a checkout the diff does not describe', () => {
+    writeFileSync(join(dir, 'f.ts'), 'export const totally = "different";\nexport const c = 2;\n');
+    const res = run(['--diff-stdin', '--format', 'compact', '--fail-on', 'error', dir], { input: diff });
+    expect(res.stderr).toContain('does not match the diff');
+    expect(res.stderr).toContain('f.ts');
+    expect(res.status).toBe(2);
+  });
+
+  it('warns instead of pretending to verify when the diff has no index lines', () => {
+    const bare = '--- a/f.ts\n+++ b/f.ts\n@@ -1,0 +2 @@\n+export const b = eval(x);\n';
+    const res = run(['--diff-stdin', '--fail-on', 'never', dir], { input: bare });
+    expect(res.stderr).toContain('cannot confirm');
+    expect(res.status).toBe(0);
+  });
+});

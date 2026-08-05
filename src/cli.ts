@@ -16,7 +16,7 @@ import { formatSarif } from './sarif.js';
 import { computeScore, formatScore } from './score.js';
 import { badgeFor } from './badge.js';
 import { BASELINE_FILENAME, loadBaseline, writeBaseline, partitionBaseline } from './baseline.js';
-import { getGitDiff, getGitRoot, resolveDiffPaths, parseDiff, shiftDiffMap, realpathOrSelf} from './diff.js';
+import { getGitDiff, getGitRoot, resolveDiffPaths, parseDiff, shiftDiffMap, realpathOrSelf, parseDiffBlobs, findDiffContentMismatches} from './diff.js';
 import { allRules, allMultilineRules } from './rules/index.js';
 import type { Severity } from './types.js';
 import type { DiffMap } from './diff.js';
@@ -251,9 +251,35 @@ const program = new Command()
       // Diff paths are repo-root-relative (git diff, gh pr diff). Resolve them
       // against the scan root like --diff does, so scanning a subdirectory
       // still matches. Outside a git repo, treat them as scan-root-relative.
-      const rawMap = parseDiff(await readStdin());
+      const rawDiffText = await readStdin();
+      const rawMap = parseDiff(rawDiffText);
       try {
-        diffMap = resolveDiffPaths(rawMap, getGitRoot(scanRoot), scanRoot);
+        const repoRoot = getGitRoot(scanRoot);
+        diffMap = resolveDiffPaths(rawMap, repoRoot, scanRoot);
+
+        // The diff supplies line numbers; the checkout supplies the bytes.
+        // Nothing guaranteed they described the same content, and for the
+        // documented `gh pr diff 42 | vibecheck --diff-stdin .` case they
+        // usually do not. Findings then get looked for at line numbers that
+        // mean nothing in the scanned file, which reads as a clean pass.
+        const blobs = parseDiffBlobs(rawDiffText);
+        if (blobs.size > 0) {
+          const mismatched = findDiffContentMismatches(blobs, repoRoot, scanRoot);
+          if (mismatched.length > 0) {
+            console.error(
+              `Error: the working copy does not match the diff for ${mismatched.length} file${mismatched.length === 1 ? '' : 's'}:`
+            );
+            for (const f of mismatched.slice(0, 10)) console.error(`  ${f}`);
+            if (mismatched.length > 10) console.error(`  ...and ${mismatched.length - 10} more`);
+            console.error('Line numbers from that diff do not describe these files, so any result would be meaningless.');
+            console.error('Check out the revision the diff was generated from, or pipe a diff of your working tree.');
+            process.exit(2);
+          }
+        } else {
+          process.stderr.write(
+            'vibecheck: this diff carries no index lines, so vibecheck cannot confirm it matches your checkout.\n'
+          );
+        }
       } catch {
         diffMap = rawMap;
       }

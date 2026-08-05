@@ -231,3 +231,74 @@ export function shiftDiffMap(map: DiffMap, removed: { file: string; line: number
   }
   return shifted;
 }
+
+/**
+ * Map each file in a unified diff to the blob hash of its DESTINATION side,
+ * taken from the `index <src>..<dst> <mode>` header.
+ *
+ * --diff-stdin only ever parsed line numbers and then scanned whatever was
+ * checked out, trusting without checking that the two describe the same
+ * content. For the documented `gh pr diff 42 | vibecheck --diff-stdin .` case
+ * they routinely do not: the diff describes the PR head, the checkout is
+ * whatever is on disk, and every finding then gets looked for at a line number
+ * that means nothing in the file being scanned.
+ *
+ * Hashes are abbreviated in the header, so callers compare by prefix.
+ */
+export function parseDiffBlobs(diff: string): Map<string, string> {
+  const blobs = new Map<string, string>();
+  let pending: string | undefined;
+
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('index ')) {
+      const m = /^index ([0-9a-f]+)\.\.([0-9a-f]+)/.exec(line);
+      pending = m?.[2];
+      continue;
+    }
+    if (line.startsWith('+++ ')) {
+      const path = parseHeaderPath(line);
+      if (path && pending) blobs.set(path, pending);
+      pending = undefined;
+    }
+  }
+
+  return blobs;
+}
+
+/**
+ * Compare the destination blobs named by a diff against what is on disk.
+ *
+ * Returns the paths whose checked-out content does not match the diff. Files
+ * absent from the checkout are not reported: a diff that deletes a file has no
+ * added lines to scan anyway.
+ */
+export function findDiffContentMismatches(
+  blobs: Map<string, string>,
+  repoRoot: string,
+  scanRoot: string
+): string[] {
+  const mismatched: string[] = [];
+  const realRepoRoot = realpathOrSelf(repoRoot);
+  const realScanRoot = realpathOrSelf(scanRoot);
+
+  for (const [filePath, expected] of blobs) {
+    const absPath = resolve(realRepoRoot, filePath);
+    const relPath = relative(realScanRoot, absPath);
+    if (relPath === '..' || relPath.startsWith('..' + sep)) continue;
+
+    let actual: string;
+    try {
+      actual = execFileSync('git', ['hash-object', absPath], {
+        cwd: realRepoRoot,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+    } catch {
+      continue; // not in the checkout; nothing to scan
+    }
+
+    if (!actual.startsWith(expected)) mismatched.push(relPath);
+  }
+
+  return mismatched;
+}
