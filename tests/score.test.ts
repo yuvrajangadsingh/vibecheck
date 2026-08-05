@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { computeScore, gradeFor, SEVERITY_WEIGHT, PER_RULE_CAP } from '../src/score.js';
+import calibration from '../src/calibration.json' with { type: 'json' };
 import type { Finding, Severity } from '../src/types.js';
 
 const f = (rule: string, severity: Severity, category = 'code-quality'): Finding => ({
@@ -93,9 +94,31 @@ describe('slop score', () => {
 
   it('grades on the documented bands', () => {
     expect(gradeFor(100)).toBe('A');
-    expect(gradeFor(90)).toBe('A');
-    expect(gradeFor(89)).toBe('B');
-    expect(gradeFor(59)).toBe('F');
+    expect(gradeFor(70)).toBe('A');
+    expect(gradeFor(69)).toBe('B');
+    expect(gradeFor(55)).toBe('B');
+    expect(gradeFor(54)).toBe('C');
+    expect(gradeFor(40)).toBe('C');
+    expect(gradeFor(39)).toBe('D');
+    expect(gradeFor(24)).toBe('F');
+    expect(gradeFor(0)).toBe('F');
+  });
+
+  // The bands only mean anything relative to the corpus they were derived from.
+  // If a recalibration moves D50 without moving the bands, this catches it: the
+  // first version graded the median repo an F, which is what the bands exist to
+  // prevent.
+  it('spreads the calibration corpus across grades instead of failing it', () => {
+    const grades = calibration.repos.map(r => {
+      // Reconstruct each repo's score from its recorded density.
+      const score = Math.round(100 * Math.exp((-r.density * Math.LN2) / calibration.d50));
+      return gradeFor(score);
+    });
+    // A median repo scores 50 by construction, so it must land mid-scale.
+    const medianGrade = gradeFor(50);
+    expect(medianGrade).toBe('C');
+    expect(grades.filter(g => g === 'F').length).toBeLessThanOrEqual(1);
+    expect(new Set(grades).size).toBeGreaterThanOrEqual(3);
   });
 
   it('severity weights are ordered and explicit', () => {

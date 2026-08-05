@@ -158,7 +158,7 @@ vibecheck --score .
 ```
 
 ```
-  slop score  68/100  (D)
+  slop score  68/100  (B)
   16.5 weighted findings per 1k lines, over 360.2k lines
 
     code-quality       12.1/KLOC   1042 findings
@@ -175,6 +175,21 @@ metric, and the first question anyone asks is which part is bad.
 31-repo scan `no-deep-nesting` alone produced 46% of all findings, so without a
 cap the score would mostly measure nesting depth while claiming to measure
 slop. When the cap bites, the output says so and names the rule.
+
+**Grades are relative to real code, not to school.**
+
+| Grade | Score | Meaning |
+|-------|-------|---------|
+| A | 70+ | cleaner than every repo in the corpus |
+| B | 55-69 | better than the top quartile |
+| C | 40-54 | the interquartile range: typical |
+| D | 25-39 | below the corpus |
+| F | under 25 | far below |
+
+A 90=A scale would be wrong here, because the curve puts the median repo at
+exactly 50. The first version used one, and it graded five of the six
+calibration repos an F and gave the cleanest of them a D. The bands are pinned
+to the corpus quartiles instead, so C means typical.
 
 **50 means typical.** The curve is `100 * exp(-density * ln2 / D50)`, where
 `D50` is the median density of a calibration corpus. Above 50 is cleaner than
@@ -203,6 +218,37 @@ vibecheck --min-score 60 .
 Exits 1 below the threshold. Sits alongside `--fail-on` and `--max-warnings`
 rather than replacing them: those catch specific findings, this catches drift
 in the whole codebase.
+
+### Badge
+
+```bash
+vibecheck --badge slop.svg .
+```
+
+Writes a shields-style SVG you can commit and reference from your README:
+
+```markdown
+![slop score](./slop.svg)
+```
+
+vibecheck's own, regenerated on every release:
+
+![slop score](./slop.svg)
+
+The SVG is self-contained. It renders no external images and calls no external
+service, so adding the badge does not report your CI runs to anyone, and it
+cannot break because someone else's server is down. Combines with `--score` and
+`--min-score`; all three read the same computation, so the badge can never
+disagree with the gate.
+
+Machine-readable form:
+
+```bash
+vibecheck --score --format json .
+```
+
+adds a `score` object to the JSON. Without `--score` the JSON is unchanged, so
+existing consumers keep parsing what they always did.
 
 ## Exit codes
 

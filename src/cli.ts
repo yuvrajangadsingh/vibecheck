@@ -5,13 +5,14 @@
 // not evidence that stdout is the product. The author saying so is.
 import { Command, InvalidArgumentError, Option } from 'commander';
 import { resolve, relative, dirname } from 'node:path';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, statSync, writeFileSync } from 'node:fs';
 import { loadConfig } from './config.js';
 import { scan } from './scanner.js';
 import { applyFixes } from './fixer.js';
 import { formatPretty, formatJSON, formatQuiet, formatCompact, formatGh, filterBySeverity, padRight } from './formatter.js';
 import { formatSarif } from './sarif.js';
 import { computeScore, formatScore } from './score.js';
+import { badgeFor } from './badge.js';
 import { BASELINE_FILENAME, loadBaseline, writeBaseline, partitionBaseline } from './baseline.js';
 import { getGitDiff, getGitRoot, resolveDiffPaths, parseDiff } from './diff.js';
 import { allRules, allMultilineRules } from './rules/index.js';
@@ -79,6 +80,7 @@ Examples:
   $ vibecheck . --format sarif > out.sarif   SARIF 2.1.0 for GitHub code scanning
   $ vibecheck --score .                      Slop score with a per-category breakdown
   $ vibecheck --min-score 60 .               CI: fail when the codebase drifts below 60
+  $ vibecheck --badge slop.svg .             Write an SVG badge for your README
   $ vibecheck --rule 'no-eval: off' .        This run only, turn one rule off
   $ vibecheck --no-defaults --rule 'no-obvious-comments: warn' .   Run exactly one rule
 
@@ -108,6 +110,7 @@ const program = new Command()
   .option('--max-warnings <n>', 'Exit 1 when more than <n> warnings are reported', parseMaxWarnings)
   .option('--score', 'Print the slop score with a per-category breakdown')
   .option('--min-score <n>', 'Exit 1 when the slop score is below <n>', parseMinScore)
+  .option('--badge <file>', 'Write an SVG slop-score badge to <file>')
   .option('-d, --diff', 'Only scan lines changed in git diff (unstaged)')
   .option('--staged', 'Only scan lines changed in git diff --cached (staged)')
   .addOption(new Option('--diff-stdin', 'Only scan lines changed in a unified diff read from stdin').conflicts(['diff', 'staged']))
@@ -130,6 +133,7 @@ const program = new Command()
     maxWarnings?: number;
     score?: boolean;
     minScore?: number;
+    badge?: string;
     diff?: boolean;
     staged?: boolean;
     diffStdin?: boolean;
@@ -280,8 +284,15 @@ const program = new Command()
     const reported = filterBySeverity(result.findings, minSeverity);
     const formatOpts = { showSuppressed: options.showSuppressed, baselinedCount };
 
+    // One score computation shared by --score, --min-score and --badge, so the
+    // number in the badge can never disagree with the number in the JSON.
+    const scored =
+      options.score || options.minScore !== undefined || options.badge
+        ? computeScore(result.findings, result.linesScanned ?? 0)
+        : null;
+
     if (format === 'json') {
-      console.log(formatJSON(result, minSeverity, { statistics: options.statistics, ...formatOpts }));
+      console.log(formatJSON(result, minSeverity, { statistics: options.statistics, score: scored ?? undefined, ...formatOpts }));
     } else if (format === 'sarif') {
       console.log(formatSarif(result, minSeverity, VERSION));
     } else if (format === 'compact') {
@@ -316,13 +327,22 @@ const program = new Command()
         failed = true;
       }
     }
+    // (score is computed earlier when JSON needs it; see scoreForOutput)
     // Slop score describes the CODEBASE, so it counts every finding, not the
     // severity-filtered view. Scoring `reported` would make the number move
     // when you change --severity, and would measure a different quantity than
     // scripts/calibrate.ts used to derive D50 — the score and its own
     // calibration have to agree or the constant is meaningless.
-    if (options.score || options.minScore !== undefined) {
-      const scored = computeScore(result.findings, result.linesScanned ?? 0);
+    if (scored) {
+      if (options.badge) {
+        try {
+          writeFileSync(options.badge, badgeFor(scored));
+          process.stderr.write(`vibecheck: wrote ${options.badge} (${scored.score}/100, ${scored.grade}).\n`);
+        } catch (err) {
+          console.error(`Error: could not write ${options.badge}: ${err instanceof Error ? err.message : err}`);
+          process.exit(2);
+        }
+      }
       if (options.score && options.format !== 'json' && options.format !== 'sarif') {
         process.stderr.write('\n' + formatScore(scored) + '\n\n');
       }

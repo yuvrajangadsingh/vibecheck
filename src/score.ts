@@ -73,11 +73,24 @@ export type ScoreResult = {
   d50: number;
 };
 
+/**
+ * Bands are anchored to the calibration corpus, not to school grades.
+ *
+ * The curve puts a repo at the corpus MEDIAN density at exactly 50, so a 90=A
+ * scale would grade the median repo an F. It did: measured against the corpus,
+ * the old bands gave five Fs and one D, including a D to Google's adk-python,
+ * the cleanest repo we measured. A badge nobody would ever display is a badge
+ * that does not get displayed.
+ *
+ * So C spans the interquartile range (p25 density scores 54, p75 scores 41),
+ * which makes C mean "typical" and the letters mean something relative to real
+ * code. Re-derive these whenever D50 is recalibrated.
+ */
 const GRADES: [number, string][] = [
-  [90, 'A'],
-  [80, 'B'],
-  [70, 'C'],
-  [60, 'D'],
+  [70, 'A'], // cleaner than every repo in the corpus
+  [55, 'B'], // better than the top quartile
+  [40, 'C'], // the interquartile range: typical
+  [25, 'D'], // below the corpus, but not pathological
   [0, 'F'],
 ];
 
