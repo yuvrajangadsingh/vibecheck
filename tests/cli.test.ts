@@ -520,14 +520,20 @@ describe('slop score integrity', () => {
   // post-baseline view sent the score to 100 with no code changed, which made
   // --min-score bypassable by writing a baseline.
   it('counts baselined findings, so a baseline cannot zero the score', () => {
-    const before = run(['--score', '--fail-on', 'never', dir]).stderr;
+    // cwd must be the fixture: the baseline path resolves against cwd, not the
+    // scan target, so running from ROOT drops a .vibecheck-baseline.json in the
+    // repo and quietly suppresses findings in every other test.
+    const at = { cwd: dir };
+    const before = run(['--score', '--fail-on', 'never', '.'], at).stderr;
     expect(before).toMatch(/slop score\s+74\/100/);
 
-    run(['--update-baseline', dir]);
-    const after = run(['--score', '--fail-on', 'never', dir]).stderr;
+    run(['--update-baseline', '.'], at);
+    expect(existsSync(join(dir, '.vibecheck-baseline.json'))).toBe(true);
+
+    const after = run(['--score', '--fail-on', 'never', '.'], at).stderr;
     expect(after).toMatch(/slop score\s+74\/100/);
 
-    const gated = run(['--min-score', '100', '--fail-on', 'never', '--format', 'quiet', dir]);
+    const gated = run(['--min-score', '100', '--fail-on', 'never', '--format', 'quiet', '.'], at);
     expect(gated.status).toBe(1);
   });
 
