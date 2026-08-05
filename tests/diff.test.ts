@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseDiff, resolveDiffPaths } from '../src/diff.js';
+import { parseDiff, resolveDiffPaths, shiftDiffMap } from '../src/diff.js';
 
 describe('parseDiff', () => {
   it('parses a simple unified diff', () => {
@@ -217,5 +217,47 @@ describe('resolveDiffPaths', () => {
     const resolved = resolveDiffPaths(diffMap, '/repo', '/repo/src');
     expect(resolved.has('app.ts')).toBe(true);
     expect(resolved.size).toBe(1);
+  });
+});
+
+describe('shiftDiffMap', () => {
+  const map = (o: Record<string, number[]>) =>
+    new Map(Object.entries(o).map(([k, v]) => [k, new Set(v)]));
+  const lines = (m: Map<string, Set<number>>, file: string) =>
+    [...(m.get(file) ?? [])].sort((a, b) => a - b);
+  const cut = (file: string, ...ls: number[]) => ls.map(line => ({ file, line }));
+
+  it('moves lines below a removal up by one', () => {
+    expect(lines(shiftDiffMap(map({ a: [1, 3] }), cut('a', 1)), 'a')).toEqual([2]);
+  });
+
+  it('accounts for every removal above a line, not just one', () => {
+    expect(lines(shiftDiffMap(map({ a: [1, 2, 5] }), cut('a', 1, 2)), 'a')).toEqual([3]);
+  });
+
+  it('handles non-contiguous removals', () => {
+    expect(lines(shiftDiffMap(map({ a: [1, 3, 5, 7] }), cut('a', 1, 5)), 'a')).toEqual([2, 5]);
+  });
+
+  it('leaves lines above a removal alone', () => {
+    expect(lines(shiftDiffMap(map({ a: [2] }), cut('a', 5)), 'a')).toEqual([2]);
+  });
+
+  it('drops a mapped line that was itself removed', () => {
+    expect(lines(shiftDiffMap(map({ a: [1] }), cut('a', 1)), 'a')).toEqual([]);
+  });
+
+  it('only shifts the file that was fixed', () => {
+    const out = shiftDiffMap(map({ a: [1, 3], b: [2] }), cut('a', 1));
+    expect(lines(out, 'a')).toEqual([2]);
+    expect(lines(out, 'b')).toEqual([2]);
+  });
+
+  it('ignores removals in a file the map does not track', () => {
+    expect(lines(shiftDiffMap(map({ a: [1] }), cut('zz', 1)), 'a')).toEqual([1]);
+  });
+
+  it('returns the map untouched when nothing was removed', () => {
+    expect(lines(shiftDiffMap(map({ a: [1, 2] }), []), 'a')).toEqual([1, 2]);
   });
 });

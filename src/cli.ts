@@ -14,7 +14,7 @@ import { formatSarif } from './sarif.js';
 import { computeScore, formatScore } from './score.js';
 import { badgeFor } from './badge.js';
 import { BASELINE_FILENAME, loadBaseline, writeBaseline, partitionBaseline } from './baseline.js';
-import { getGitDiff, getGitRoot, resolveDiffPaths, parseDiff } from './diff.js';
+import { getGitDiff, getGitRoot, resolveDiffPaths, parseDiff, shiftDiffMap} from './diff.js';
 import { allRules, allMultilineRules } from './rules/index.js';
 import type { Severity } from './types.js';
 import type { DiffMap } from './diff.js';
@@ -135,7 +135,9 @@ const program = new Command()
     ])
   )
   .option('-d, --diff', 'Only scan lines changed in git diff (unstaged)')
-  .option('--staged', 'Only scan lines changed in git diff --cached (staged)')
+  .addOption(
+    new Option('--staged', 'Only scan lines changed in git diff --cached (staged)').conflicts(['diff'])
+  )
   .addOption(new Option('--diff-stdin', 'Only scan lines changed in a unified diff read from stdin').conflicts(['diff', 'staged']))
   .option('--statistics', 'Append per-rule finding counts to the report (pretty and json)')
   .addOption(new Option('--update-baseline', `Record current findings in ${BASELINE_FILENAME}, then exit 0`).conflicts(['diff', 'staged', 'diffStdin']))
@@ -276,6 +278,10 @@ const program = new Command()
       if (fixResult.linesRemoved > 0) {
         fixNote = `  ✔ fixed ${fixResult.linesRemoved} finding${fixResult.linesRemoved === 1 ? '' : 's'} in ${fixResult.filesModified} file${fixResult.filesModified === 1 ? '' : 's'} (removed AI attribution comments)\n`;
         try {
+          // The fixer deleted lines, so the map built before the fix now points
+          // at the wrong ones. Shift it by what was actually removed rather
+          // than reusing it, which silently dropped shifted findings.
+          if (diffMap) diffMap = shiftDiffMap(diffMap, fixResult.fixedFindings);
           result = await scan(scanRoot, config, diffMap);
         } catch {
           // keep pre-rescan result if the second pass fails
@@ -293,6 +299,13 @@ const program = new Command()
       console.log(`Baseline written: ${recorded} finding${recorded === 1 ? '' : 's'} recorded in ${BASELINE_FILENAME}`);
       return;
     }
+    // Captured before the baseline is applied. The slop score describes the
+    // codebase, so baselined findings still count: baselining is a decision to
+    // defer slop, not to remove it. Scoring the post-baseline view sent the
+    // score to 100 the moment a baseline was written, with no code changed,
+    // which also made --min-score trivially bypassable.
+    const allFindings = result.findings;
+
     const baseline = loadBaseline(baselinePath);
     if (baseline) {
       const partitioned = partitionBaseline(result.findings, baseline);
@@ -311,7 +324,7 @@ const program = new Command()
     // number in the badge can never disagree with the number in the JSON.
     const scored =
       options.score || options.minScore !== undefined || options.badge
-        ? computeScore(result.findings, result.linesScanned ?? 0)
+        ? computeScore(allFindings, result.linesScanned ?? 0)
         : null;
 
     if (format === 'json') {
@@ -350,7 +363,6 @@ const program = new Command()
         failed = true;
       }
     }
-    // (score is computed earlier when JSON needs it; see scoreForOutput)
     // Slop score describes the CODEBASE, so it counts every finding, not the
     // severity-filtered view. Scoring `reported` would make the number move
     // when you change --severity, and would measure a different quantity than
@@ -366,7 +378,9 @@ const program = new Command()
           process.exit(2);
         }
       }
-      if (options.score && options.format !== 'json' && options.format !== 'sarif') {
+      // json embeds the score in its payload; every other format, sarif
+      // included, gets it on stderr so stdout stays a clean document.
+      if (options.score && options.format !== 'json') {
         process.stderr.write('\n' + formatScore(scored) + '\n\n');
       }
       if (options.minScore !== undefined && scored.score < options.minScore) {

@@ -112,13 +112,42 @@ describe('slop score', () => {
   const scoreOf = (density: number) =>
     Math.round(100 * Math.exp((-density * Math.LN2) / calibration.d50));
 
+  // Quartiles are RECOMPUTED from calibration.repos rather than read from
+  // calibration.densities. Reading the cached values let a corpus edit slip
+  // through: changing one repo's density without updating densities.p25 moved
+  // the real p25 grade from C to B while every test stayed green.
+  //
+  // This mirrors scripts/calibrate.ts exactly — Tukey hinges (the median of
+  // each half), not linear interpolation. Writing it the other way made this
+  // test fail against correct data, which is the wrong direction to be wrong in.
+  const median = (xs: number[]) => {
+    const a = [...xs].sort((x, y) => x - y);
+    const m = Math.floor(a.length / 2);
+    return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+  };
+  const corpusDensities = () => calibration.repos.map(r => r.density);
+
+  it('keeps the cached quartiles in sync with the corpus', () => {
+    const d = corpusDensities();
+    const mid = median(d);
+    expect(median(d.filter(x => x <= mid))).toBeCloseTo(calibration.densities.p25, 2);
+    expect(mid).toBeCloseTo(calibration.densities.median, 1);
+    expect(median(d.filter(x => x >= mid))).toBeCloseTo(calibration.densities.p75, 2);
+    // D50 is the corpus median by definition; if it drifts, the curve lies.
+    expect(calibration.d50).toBeCloseTo(mid, 1);
+  });
+
   it('keeps C spanning the corpus interquartile range', () => {
-    const { p25, median, p75 } = calibration.densities;
+    const d = corpusDensities();
+    const mid = median(d);
+    const p25 = median(d.filter(x => x <= mid));
+    const median_ = mid;
+    const p75 = median(d.filter(x => x >= mid));
     expect(gradeFor(scoreOf(p25))).toBe('C');
-    expect(gradeFor(scoreOf(median))).toBe('C');
+    expect(gradeFor(scoreOf(median_))).toBe('C');
     expect(gradeFor(scoreOf(p75))).toBe('C');
     // Median density scores 50 by construction; that is what makes C "typical".
-    expect(scoreOf(median)).toBe(50);
+    expect(scoreOf(median_)).toBe(50);
   });
 
   it('spreads the calibration corpus across grades instead of failing it', () => {

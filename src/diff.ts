@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve, relative, sep } from 'node:path';
 
@@ -157,14 +158,29 @@ export function getGitDiff(cwd: string, staged: boolean): DiffMap {
  */
 export function resolveDiffPaths(diffMap: DiffMap, repoRoot: string, scanRoot: string): DiffMap {
   const resolved: DiffMap = new Map();
+  // `git rev-parse` hands back a canonical path, but the scan root is whatever
+  // the user typed. On macOS /tmp is a symlink to /private/tmp, so comparing
+  // the two made every changed file look like it sat outside the scan root and
+  // diff mode reported a silent clean. Canonicalize both before comparing.
+  const realRepoRoot = realpathOrSelf(repoRoot);
+  const realScanRoot = realpathOrSelf(scanRoot);
   for (const [filePath, lines] of diffMap) {
-    const absPath = resolve(repoRoot, filePath);
-    const relPath = relative(scanRoot, absPath);
+    const absPath = resolve(realRepoRoot, filePath);
+    const relPath = relative(realScanRoot, absPath);
     // Skip files outside the scan root
     if (relPath === '..' || relPath.startsWith('..' + sep)) continue;
     resolved.set(relPath, lines);
   }
   return resolved;
+}
+
+/** realpath, falling back to the input when the path does not exist yet. */
+function realpathOrSelf(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
 }
 
 /**
@@ -175,4 +191,43 @@ export function getGitRoot(cwd: string): string {
     cwd,
     encoding: 'utf-8',
   }).trim();
+}
+
+/**
+ * Shift a diff map to account for lines that `--fix` deleted.
+ *
+ * The map is built against the pre-fix file. Once the fixer removes a line
+ * every line below it moves up by one, so reusing the map makes the rescan
+ * look at the wrong lines and silently drop findings that moved out of it.
+ * That let `--diff --fix --fail-on error` print "No issues found" and exit 0
+ * with an eval() still in the file.
+ */
+export function shiftDiffMap(map: DiffMap, removed: { file: string; line: number }[]): DiffMap {
+  if (removed.length === 0) return map;
+
+  const cutsByFile = new Map<string, number[]>();
+  for (const r of removed) {
+    const list = cutsByFile.get(r.file) ?? [];
+    list.push(r.line);
+    cutsByFile.set(r.file, list);
+  }
+
+  const shifted: DiffMap = new Map();
+  for (const [file, lines] of map) {
+    const cuts = cutsByFile.get(file);
+    if (!cuts) {
+      shifted.set(file, lines);
+      continue;
+    }
+    const cutSet = new Set(cuts);
+    const next = new Set<number>();
+    for (const line of lines) {
+      if (cutSet.has(line)) continue; // the line itself is gone
+      let above = 0;
+      for (const c of cuts) if (c < line) above++;
+      next.add(line - above);
+    }
+    shifted.set(file, next);
+  }
+  return shifted;
 }
