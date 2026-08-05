@@ -175,7 +175,7 @@ export function resolveDiffPaths(diffMap: DiffMap, repoRoot: string, scanRoot: s
 }
 
 /** realpath, falling back to the input when the path does not exist yet. */
-function realpathOrSelf(p: string): string {
+export function realpathOrSelf(p: string): string {
   try {
     return realpathSync(p);
   } catch {

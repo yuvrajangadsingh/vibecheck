@@ -62,6 +62,13 @@ export type Config = {
   include: string[];
 };
 
+/** A file the scanner could not read, and why. Never silently dropped. */
+export type SkippedFile = {
+  file: string;
+  reason: 'too-large' | 'unreadable' | 'binary';
+  detail?: string;
+};
+
 export type ScanResult = {
   findings: Finding[];
   /** Findings silenced by inline vibecheck-disable directives. Optional for backward compat. */
@@ -71,4 +78,10 @@ export type ScanResult = {
   linesScanned?: number;
   duration: number;
   summary: Record<Severity, number>;
+  /**
+   * Files that matched the scan but could not be read. Reporting these is the
+   * difference between "looked and it is fine" and "never looked", which the
+   * scanner used to collapse into the same silent pass.
+   */
+  skipped?: SkippedFile[];
 };

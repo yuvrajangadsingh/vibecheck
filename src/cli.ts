@@ -8,13 +8,14 @@ import { resolve, relative, dirname } from 'node:path';
 import { existsSync, statSync, writeFileSync } from 'node:fs';
 import { loadConfig } from './config.js';
 import { scan } from './scanner.js';
+import fg from 'fast-glob';
 import { applyFixes } from './fixer.js';
 import { formatPretty, formatJSON, formatQuiet, formatCompact, formatGh, filterBySeverity, padRight } from './formatter.js';
 import { formatSarif } from './sarif.js';
 import { computeScore, formatScore } from './score.js';
 import { badgeFor } from './badge.js';
 import { BASELINE_FILENAME, loadBaseline, writeBaseline, partitionBaseline } from './baseline.js';
-import { getGitDiff, getGitRoot, resolveDiffPaths, parseDiff, shiftDiffMap} from './diff.js';
+import { getGitDiff, getGitRoot, resolveDiffPaths, parseDiff, shiftDiffMap, realpathOrSelf} from './diff.js';
 import { allRules, allMultilineRules } from './rules/index.js';
 import type { Severity } from './types.js';
 import type { DiffMap } from './diff.js';
@@ -209,6 +210,8 @@ const program = new Command()
 
     // Determine scan root
     let scanRoot = resolvedPath;
+    let explicitFile: string | undefined;
+    let explicitFiles: string[] | undefined;
     let stat;
     try {
       stat = statSync(resolvedPath);
@@ -218,9 +221,17 @@ const program = new Command()
     }
 
     if (stat.isFile()) {
-      // For single file, scan its parent dir and include only the filename
-      scanRoot = dirname(resolvedPath);
-      config.include = [relative(scanRoot, resolvedPath)];
+      // For single file, scan its parent dir and include only the filename.
+      //
+      // realpath first: file discovery does not follow symlinks, so naming a
+      // symlinked file directly matched nothing and reported a silent clean.
+      // escapePath second: the filename becomes a glob pattern here, so a
+      // leading '!' read as a negation and a backslash as an escape, and the
+      // file was skipped without a word.
+      const realFile = realpathOrSelf(resolvedPath);
+      scanRoot = dirname(realFile);
+      explicitFile = relative(scanRoot, realFile);
+      explicitFiles = [realFile];
     }
 
     const format: OutputFormat = options.format ?? (options.json ? 'json' : options.quiet ? 'quiet' : 'pretty');
@@ -265,7 +276,7 @@ const program = new Command()
 
     let result;
     try {
-      result = await scan(scanRoot, config, diffMap);
+      result = await scan(scanRoot, config, diffMap, { files: explicitFiles });
     } catch (err) {
       console.error(`Error: scan failed for "${targetPath}".`, err instanceof Error ? err.message : '');
       process.exit(2);
@@ -282,7 +293,7 @@ const program = new Command()
           // at the wrong ones. Shift it by what was actually removed rather
           // than reusing it, which silently dropped shifted findings.
           if (diffMap) diffMap = shiftDiffMap(diffMap, fixResult.fixedFindings);
-          result = await scan(scanRoot, config, diffMap);
+          result = await scan(scanRoot, config, diffMap, { files: explicitFiles });
         } catch {
           // keep pre-rescan result if the second pass fails
         }
@@ -350,6 +361,27 @@ const program = new Command()
       // not a clean run.
       if (result.findings.length === 0 && (result.suppressed?.length ?? 0) === 0 && (baselinedCount ?? 0) === 0 && process.stderr.isTTY) {
         process.stderr.write('  ★ If this saved you a review cycle, star the repo: https://github.com/yuvrajangadsingh/vibecheck\n\n');
+      }
+    }
+
+    // A file the scanner could not read is not a file that passed. Report every
+    // skip, and fail closed when the user named the file explicitly — they
+    // asked about that file and deserve an answer, not silence.
+    const skipped = result.skipped ?? [];
+    if (skipped.length > 0) {
+      const label: Record<string, string> = {
+        'too-large': 'too large',
+        unreadable: 'unreadable',
+        binary: 'binary',
+      };
+      for (const sk of skipped) {
+        process.stderr.write(
+          `vibecheck: skipped ${sk.file} (${label[sk.reason] ?? sk.reason}${sk.detail ? `: ${sk.detail}` : ''}).\n`
+        );
+      }
+      if (explicitFile && skipped.some((sk) => sk.file === explicitFile)) {
+        process.stderr.write('vibecheck: the requested file was not scanned, so this is not a pass.\n');
+        process.exit(2);
       }
     }
 

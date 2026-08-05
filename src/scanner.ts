@@ -4,7 +4,7 @@ import fg from 'fast-glob';
 import { allRules, allMultilineRules } from './rules/index.js';
 import { maskLines } from './lexer.js';
 import { parseSuppressions, isSuppressed } from './suppressions.js';
-import type { Config, Finding, ScanResult, Severity } from './types.js';
+import type { Config, Finding, ScanResult, Severity, SkippedFile} from './types.js';
 import type { DiffMap } from './diff.js';
 
 const MAX_FILE_SIZE = 1_000_000; // 1MB
@@ -203,20 +203,42 @@ export function scanContent(content: string, filePath: string, config: Config): 
   return scanContentDetailed(content, filePath, config).findings;
 }
 
-export async function scan(targetPath: string, config: Config, diffMap?: DiffMap): Promise<ScanResult> {
+const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+export type ScanOptions = {
+  /**
+   * Scan exactly these files (absolute paths) instead of globbing.
+   *
+   * An explicitly named file must not go through glob matching: fast-glob
+   * treats a backslash in the name as a separator and rewrites `back\slash.ts`
+   * into `back/slash.ts`, which then does not exist, and a leading `!` reads as
+   * a negation. Either way the file was silently skipped.
+   */
+  files?: string[];
+};
+
+export async function scan(
+  targetPath: string,
+  config: Config,
+  diffMap?: DiffMap,
+  options: ScanOptions = {}
+): Promise<ScanResult> {
   const start = performance.now();
   const findings: Finding[] = [];
   const suppressed: Finding[] = [];
 
-  const files = await fg(config.include, {
-    cwd: targetPath,
-    ignore: config.ignore,
-    absolute: true,
-    dot: false,
-    onlyFiles: true,
-    followSymbolicLinks: false,
-  });
+  const files =
+    options.files ??
+    (await fg(config.include, {
+      cwd: targetPath,
+      ignore: config.ignore,
+      absolute: true,
+      dot: false,
+      onlyFiles: true,
+      followSymbolicLinks: false,
+    }));
 
+  const skipped: SkippedFile[] = [];
   let scannedCount = 0;
   // Non-empty lines only: blank-line padding must not dilute a density score,
   // or a file could improve its grade by adding whitespace.
@@ -229,23 +251,36 @@ export async function scan(targetPath: string, config: Config, diffMap?: DiffMap
     const changedLines = diffMap?.get(relPath);
     if (diffMap && !changedLines) continue;
 
-    // Skip large files
+    // Every skip below is RECORDED, not swallowed. A file the scanner could
+    // not read used to be indistinguishable from a file it read and liked, so
+    // an unreadable or oversized file containing an eval() exited 0 silently.
     try {
       const stat = statSync(filePath);
-      if (stat.size > MAX_FILE_SIZE) continue;
-    } catch {
+      if (stat.size > MAX_FILE_SIZE) {
+        skipped.push({
+          file: relPath,
+          reason: 'too-large',
+          detail: `${Math.round(stat.size / 1024)}KB exceeds the ${Math.round(MAX_FILE_SIZE / 1024)}KB limit`,
+        });
+        continue;
+      }
+    } catch (err) {
+      skipped.push({ file: relPath, reason: 'unreadable', detail: errText(err) });
       continue;
     }
 
     let content: string;
     try {
       content = readFileSync(filePath, 'utf-8');
-    } catch {
+    } catch (err) {
+      skipped.push({ file: relPath, reason: 'unreadable', detail: errText(err) });
       continue;
     }
 
-    // Skip binary files
-    if (content.includes('\0')) continue;
+    if (content.includes('\0')) {
+      skipped.push({ file: relPath, reason: 'binary' });
+      continue;
+    }
 
     scannedCount++;
     for (const line of content.split('\n')) {
@@ -283,5 +318,6 @@ export async function scan(targetPath: string, config: Config, diffMap?: DiffMap
     linesScanned,
     duration: performance.now() - start,
     summary,
+    skipped,
   };
 }

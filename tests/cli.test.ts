@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -542,5 +542,67 @@ describe('slop score integrity', () => {
     expect(res.stderr).toContain('slop score');
     expect(() => JSON.parse(res.stdout)).not.toThrow();
     expect(JSON.parse(res.stdout).version).toBe('2.1.0');
+  });
+});
+
+// The scanner used to treat "could not read it" and "read it and it is fine"
+// as the same outcome, so every case here exited 0 on a file containing eval().
+describe('files the scanner cannot read are never reported clean', () => {
+  let dir: string;
+  const EVAL = 'export const a = eval(x);\n';
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'vibecheck-cli-skip-'));
+    writeFileSync(join(dir, 'real.ts'), EVAL);
+    symlinkSync('real.ts', join(dir, 'link.ts'));
+    writeFileSync(join(dir, 'locked.ts'), EVAL);
+    writeFileSync(join(dir, 'over.ts'), EVAL + '// pad\n'.repeat(143_000));
+    writeFileSync(join(dir, '!bang.ts'), EVAL);
+    writeFileSync(join(dir, 'back\\slash.ts'), EVAL);
+  });
+
+  afterAll(() => {
+    chmodSync(join(dir, 'locked.ts'), 0o644);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('follows an explicitly named symlinked file', () => {
+    const res = run(['--format', 'compact', '--fail-on', 'error', join(dir, 'link.ts')]);
+    expect(res.stdout).toContain('no-eval');
+    expect(res.status).toBe(1);
+  });
+
+  it('does not glob-interpret a filename with a leading bang', () => {
+    const res = run(['--format', 'compact', '--fail-on', 'error', join(dir, '!bang.ts')]);
+    expect(res.stdout).toContain('no-eval');
+    expect(res.status).toBe(1);
+  });
+
+  it('does not glob-interpret a backslash in a filename', () => {
+    const res = run(['--format', 'compact', '--fail-on', 'error', join(dir, 'back\\slash.ts')]);
+    expect(res.stdout).toContain('no-eval');
+    expect(res.status).toBe(1);
+  });
+
+  it('exits 2 and says why when an explicitly named file is unreadable', () => {
+    chmodSync(join(dir, 'locked.ts'), 0o000);
+    const res = run(['--format', 'compact', '--fail-on', 'error', join(dir, 'locked.ts')]);
+    chmodSync(join(dir, 'locked.ts'), 0o644);
+    expect(res.stderr).toContain('skipped locked.ts');
+    expect(res.stderr).toContain('unreadable');
+    expect(res.status).toBe(2);
+  });
+
+  it('exits 2 and says why when an explicitly named file is over the size cap', () => {
+    const res = run(['--format', 'compact', '--fail-on', 'error', join(dir, 'over.ts')]);
+    expect(res.stderr).toContain('skipped over.ts');
+    expect(res.stderr).toContain('too large');
+    expect(res.status).toBe(2);
+  });
+
+  it('reports a skip during a directory scan without failing the run', () => {
+    const res = run(['--format', 'compact', '--fail-on', 'never', dir]);
+    expect(res.stderr).toContain('skipped over.ts');
+    expect(res.status).toBe(0);
   });
 });
