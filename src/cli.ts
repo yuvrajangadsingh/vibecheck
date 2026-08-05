@@ -289,7 +289,15 @@ const program = new Command()
           );
         }
       } catch {
+        // Outside a git repository the blob hashes cannot be checked at all.
+        // Silently falling through meant an indexed diff skipped verification
+        // entirely, which is the case most likely to be piped from elsewhere.
         diffMap = rawMap;
+        if (/^index [0-9a-f]+\.\.[0-9a-f]+/m.test(rawDiffText)) {
+          process.stderr.write(
+            'vibecheck: not a git repository, so this diff cannot be checked against the files being scanned.\n'
+          );
+        }
       }
     } else if (options.staged) {
       // Read the INDEX, not the working tree. Those are different files, and

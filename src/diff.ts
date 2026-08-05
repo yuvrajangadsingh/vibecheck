@@ -46,6 +46,10 @@ function unquoteGitPath(quoted: string): string {
  * +++ "b/quo\"te.ts", +++ b/path\twith\ttabs
  */
 function parseHeaderPath(line: string): string | null {
+  // Prefixes are configurable: diff.mnemonicPrefix emits i/ w/ c/ o/ instead of
+  // a/ b/, and diff.noprefix emits none at all. Accepting only a/ and b/ made
+  // both configurations parse as "no files changed", a silent clean.
+
   // Strip the +++ or --- prefix
   const rest = line.slice(4);
 
@@ -53,17 +57,28 @@ function parseHeaderPath(line: string): string | null {
     // Git C-style quoted path: "b/space name.ts", "b/caf\303\251.ts"
     const closing = rest.lastIndexOf('"');
     if (closing <= 0) return null;
-    return unquoteGitPath(rest.slice(1, closing)).replace(/^[ab]\//, '');
+    return stripPrefix(unquoteGitPath(rest.slice(1, closing)));
   }
 
-  if (rest.startsWith('b/') || rest.startsWith('a/')) {
-    // Unquoted path: b/src/foo.ts (may have trailing tab from git)
-    const path = rest.slice(2);
-    const tabIdx = path.indexOf('\t');
-    return tabIdx >= 0 ? path.slice(0, tabIdx) : path;
-  }
+  if (rest === '/dev/null') return null;
 
-  return null;
+  // Unquoted path, possibly with a trailing tab from git
+  const tabIdx = rest.indexOf('\t');
+  const path = tabIdx >= 0 ? rest.slice(0, tabIdx) : rest;
+  if (!path) return null;
+  return stripPrefix(path);
+}
+
+/**
+ * Remove git's source/destination prefix.
+ *
+ * a/ and b/ are the defaults; diff.mnemonicPrefix substitutes i/ (index),
+ * w/ (working tree), c/ (commit) and o/ (object); diff.noprefix removes it
+ * entirely. Only the first two were handled, so either setting made every diff
+ * parse as no changed files.
+ */
+function stripPrefix(path: string): string {
+  return /^[abciwo]\//.test(path) ? path.slice(2) : path;
 }
 
 /**
@@ -153,12 +168,27 @@ export function getGitDiff(cwd: string, staged: boolean): DiffMap {
     '--no-ext-diff',
   ];
 
-  try {
-    const output = execFileSync('git', args, {
+  const runDiff = (withText: boolean) =>
+    execFileSync('git', withText ? args : args.filter((a) => a !== '--text'), {
       cwd,
       encoding: 'utf-8',
-      maxBuffer: 10 * 1024 * 1024,
+      maxBuffer: 256 * 1024 * 1024,
     });
+
+  try {
+    let output: string;
+    try {
+      output = runDiff(true);
+    } catch (bufErr) {
+      // --text expands binaries inline, so a large changed asset can outgrow
+      // the buffer. Falling back loses gitattributes-binary coverage for this
+      // run, which is worth saying out loud, but it beats crashing.
+      if (!(bufErr instanceof Error) || !/ENOBUFS|maxBuffer/.test(bufErr.message)) throw bufErr;
+      process.stderr.write(
+        'vibecheck: diff too large to expand as text; a file marked binary by .gitattributes may go unscanned.\n'
+      );
+      output = runDiff(false);
+    }
     return parseDiff(output);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -274,7 +304,18 @@ export function parseDiffBlobs(diff: string): {
   // \r is stripped the same way parseDiff strips it. Without this a CRLF diff
   // yielded the path "f.ts\r", which hashes to nothing and was quietly dropped,
   // skipping verification entirely.
+  // `diff --git` opens a block. Without tracking that, a commit message that
+  // quotes diff syntax (format-patch puts the message above the patch) was read
+  // as a second patch and a perfectly good single-commit stream was refused.
+  let inDiff = false;
+
   for (const line of diff.split('\n').map((l) => l.replace(/\r$/, ''))) {
+    if (line.startsWith('diff --git ') || line.startsWith('diff --cc ')) {
+      inDiff = true;
+      pending = undefined;
+      continue;
+    }
+    if (!inDiff) continue;
     if (line.startsWith('index ')) {
       const m = /^index ([0-9a-f]+)\.\.([0-9a-f]+)/.exec(line);
       pending = m?.[2];
@@ -315,6 +356,9 @@ export function findDiffContentMismatches(
   const realScanRoot = realpathOrSelf(scanRoot);
 
   for (const [filePath, expected] of blobs) {
+    // An all-zero destination is a deletion: no content to check, no lines to
+    // scan.
+    if (/^0+$/.test(expected)) continue;
     const absPath = resolve(realRepoRoot, filePath);
     const relPath = relative(realScanRoot, absPath);
     if (relPath === '..' || relPath.startsWith('..' + sep)) continue;
@@ -327,7 +371,12 @@ export function findDiffContentMismatches(
         stdio: ['ignore', 'pipe', 'ignore'],
       }).trim();
     } catch {
-      continue; // not in the checkout; nothing to scan
+      // A recorded `+++ b/path` means the diff expects this file to EXIST on
+      // the destination side. Absent from the checkout is a mismatch, not a
+      // free pass — treating it as "nothing to scan" let a whole added file go
+      // unverified and unscanned.
+      mismatched.push(relPath);
+      continue;
     }
 
     // Expand the abbreviated hash through git rather than comparing prefixes.
