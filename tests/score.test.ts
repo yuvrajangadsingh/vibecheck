@@ -104,21 +104,51 @@ describe('slop score', () => {
     expect(gradeFor(0)).toBe('F');
   });
 
-  // The bands only mean anything relative to the corpus they were derived from.
-  // If a recalibration moves D50 without moving the bands, this catches it: the
-  // first version graded the median repo an F, which is what the bands exist to
-  // prevent.
+  // The bands encode one claim: C spans the corpus interquartile range, so C
+  // means typical. Assert that claim directly against calibration.json rather
+  // than asserting a loose distribution — a weaker version of this test passed
+  // when D50 was moved 30 -> 20 without touching the bands, which is exactly
+  // the stale-calibration case it exists to catch.
+  const scoreOf = (density: number) =>
+    Math.round(100 * Math.exp((-density * Math.LN2) / calibration.d50));
+
+  it('keeps C spanning the corpus interquartile range', () => {
+    const { p25, median, p75 } = calibration.densities;
+    expect(gradeFor(scoreOf(p25))).toBe('C');
+    expect(gradeFor(scoreOf(median))).toBe('C');
+    expect(gradeFor(scoreOf(p75))).toBe('C');
+    // Median density scores 50 by construction; that is what makes C "typical".
+    expect(scoreOf(median)).toBe(50);
+  });
+
   it('spreads the calibration corpus across grades instead of failing it', () => {
-    const grades = calibration.repos.map(r => {
-      // Reconstruct each repo's score from its recorded density.
-      const score = Math.round(100 * Math.exp((-r.density * Math.LN2) / calibration.d50));
-      return gradeFor(score);
-    });
-    // A median repo scores 50 by construction, so it must land mid-scale.
-    const medianGrade = gradeFor(50);
-    expect(medianGrade).toBe('C');
+    const grades = calibration.repos.map(r => gradeFor(scoreOf(r.density)));
+    // The first version of these bands gave five Fs and one D.
     expect(grades.filter(g => g === 'F').length).toBeLessThanOrEqual(1);
     expect(new Set(grades).size).toBeGreaterThanOrEqual(3);
+    // The cleanest repo in the corpus must beat typical, the worst must not.
+    const sorted = [...calibration.repos].sort((a, b) => a.density - b.density);
+    expect(gradeFor(scoreOf(sorted[0].density))).toBe('B');
+    expect(gradeFor(scoreOf(sorted[sorted.length - 1].density))).toBe('F');
+  });
+
+  // computeScore is exported, so a caller can hand it a bad line count or D50.
+  // Unguarded these produced a NaN score graded F, and a score of 107 graded A.
+  it('stays inside 0..100 for degenerate inputs', () => {
+    const warn = { severity: 'warn', rule: 'r', category: 'c' } as never;
+    const inputs: [string, number][] = [
+      ['undefined lines', computeScore([warn], undefined as never).score],
+      ['NaN lines', computeScore([warn], NaN).score],
+      ['negative d50', computeScore([warn], 1000, -30).score],
+      ['zero d50', computeScore([], 1000, 0).score],
+    ];
+    for (const [label, score] of inputs) {
+      expect(Number.isFinite(score), label).toBe(true);
+      expect(score, label).toBeGreaterThanOrEqual(0);
+      expect(score, label).toBeLessThanOrEqual(100);
+    }
+    // A rejected D50 must not be reported back as if it were used.
+    expect(computeScore([warn], 1000, -30).d50).toBeGreaterThan(0);
   });
 
   it('severity weights are ordered and explicit', () => {

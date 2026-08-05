@@ -88,6 +88,21 @@ describe('usage errors exit 2', () => {
     expect(run(['--diff-stdin', '--diff', '.'], { cwd: cleanDir }).status).toBe(2);
   });
 
+  // The score is per-KLOC over a whole codebase. In diff mode only changed
+  // lines are scanned and the MIN_LINES floor divides by 1000, which produced a
+  // number that was both meaningless and optimistic: a commit adding eval()
+  // scored 69 (B) in diff mode vs 46 (C) for the same repo scanned whole. A
+  // --diff --min-score gate would have waved through what it exists to catch.
+  it('refuses the score flags in diff mode instead of reporting a flattering number', () => {
+    for (const mode of ['--diff', '--staged', '--diff-stdin']) {
+      for (const scoreFlag of [['--score'], ['--min-score', '60'], ['--badge', 'x.svg']]) {
+        const res = run([mode, ...scoreFlag, '.'], { cwd: cleanDir });
+        expect(res.status, `${mode} ${scoreFlag[0]}`).toBe(2);
+        expect(res.stderr, `${mode} ${scoreFlag[0]}`).toContain('cannot be used with');
+      }
+    }
+  });
+
   it('exits 2 for a nonexistent path', () => {
     const res = run(['/nonexistent-vibecheck-path']);
     expect(res.status).toBe(2);

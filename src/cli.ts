@@ -108,9 +108,32 @@ const program = new Command()
   .option('-q, --quiet', 'Only show summary (alias for --format quiet)')
   .addOption(new Option('--fail-on <level>', 'Exit 1 when findings at or above this severity exist').choices(['error', 'warn', 'info', 'never']).default('error'))
   .option('--max-warnings <n>', 'Exit 1 when more than <n> warnings are reported', parseMaxWarnings)
-  .option('--score', 'Print the slop score with a per-category breakdown')
-  .option('--min-score <n>', 'Exit 1 when the slop score is below <n>', parseMinScore)
-  .option('--badge <file>', 'Write an SVG slop-score badge to <file>')
+  // The score is findings per KLOC of a CODEBASE. In diff mode only changed
+  // lines are scanned, and the MIN_LINES floor then divides those findings by
+  // 1000, so the result reads as a codebase score while being nothing of the
+  // sort — and it is biased optimistic. A commit adding eval() scored 69 (B)
+  // in diff mode against 46 (C) for the same repo scanned whole, which would
+  // let `--diff --min-score` wave through the exact commits it exists to stop.
+  // Refusing is better than reporting a number that flatters.
+  .addOption(
+    new Option('--score', 'Print the slop score with a per-category breakdown').conflicts([
+      'diff',
+      'staged',
+      'diffStdin',
+    ])
+  )
+  .addOption(
+    new Option('--min-score <n>', 'Exit 1 when the slop score is below <n>')
+      .argParser(parseMinScore)
+      .conflicts(['diff', 'staged', 'diffStdin'])
+  )
+  .addOption(
+    new Option('--badge <file>', 'Write an SVG slop-score badge to <file>').conflicts([
+      'diff',
+      'staged',
+      'diffStdin',
+    ])
+  )
   .option('-d, --diff', 'Only scan lines changed in git diff (unstaged)')
   .option('--staged', 'Only scan lines changed in git diff --cached (staged)')
   .addOption(new Option('--diff-stdin', 'Only scan lines changed in a unified diff read from stdin').conflicts(['diff', 'staged']))

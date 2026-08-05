@@ -209,6 +209,15 @@ published score unfalsifiable.
 finding regardless of `--severity`, so changing what you display never moves
 the number.
 
+**Not available in diff mode.** `--score`, `--min-score` and `--badge` refuse to
+run alongside `--diff`, `--staged` or `--diff-stdin`. The score is findings per
+KLOC of a whole codebase; in diff mode only changed lines are scanned and the
+1 KLOC floor then divides those findings by 1000, which reads as a codebase
+score while being nothing of the sort. It also flatters: a commit adding an
+`eval()` scored 69 (B) in diff mode against 46 (C) for the same repo scanned
+whole. Gate pull requests with `--fail-on` and `--max-warnings`, which are
+designed for changed lines, and gate the codebase with `--min-score`.
+
 ### Gate a build on it
 
 ```bash

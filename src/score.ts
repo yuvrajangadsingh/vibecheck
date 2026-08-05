@@ -116,7 +116,12 @@ export function computeScore(
   // small inputs get diluted toward "fine" rather than exaggerated toward
   // "catastrophic" — the metric is about codebases, not snippets.
   const MIN_LINES = 1000;
-  const kloc = Math.max(lines, MIN_LINES) / 1000;
+  // Guard the inputs rather than trusting callers: this is exported, and a
+  // non-finite line count or a non-positive D50 otherwise propagates silently
+  // into a NaN score and an F grade, or a score above 100.
+  const safeLines = Number.isFinite(lines) ? lines : 0;
+  const safeD50 = Number.isFinite(d50) && d50 > 0 ? d50 : D50;
+  const kloc = Math.max(safeLines, MIN_LINES) / 1000;
 
   const byRule = new Map<string, number>();
   const byCategory = new Map<string, { weighted: number; count: number }>();
@@ -146,7 +151,7 @@ export function computeScore(
   }
 
   // Half-life curve: every d50 points of density halves the score.
-  const score = Math.round(100 * Math.exp((-density * Math.LN2) / d50));
+  const score = Math.round(100 * Math.exp((-density * Math.LN2) / safeD50));
 
   const categories = [...byCategory.entries()]
     .map(([category, v]) => ({
@@ -164,7 +169,7 @@ export function computeScore(
     kloc: Math.round(kloc * 10) / 10,
     cappedRules: cappedRules.sort((a, b) => b.raw - a.raw),
     categories,
-    d50,
+    d50: safeD50,
   };
 }
 
