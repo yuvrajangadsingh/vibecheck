@@ -469,6 +469,14 @@ export function getIndexContents(repoRoot: string, scanRoot: string, paths: stri
     if (!Number.isFinite(size)) break;
     const body = batch.slice(cursor, cursor + size);
     cursor += size + 1; // payload plus its trailing newline
+
+    // An empty index blob is what `git add -N` writes, which is how an unstaged
+    // rename shows up. Treating that as the real "before" made every finding in
+    // a moved file look introduced — false blame on code the author only moved.
+    // Leaving the entry unset falls back to anchor matching, which is what the
+    // previous release did for these files anyway.
+    if (size === 0) continue;
+
     out.set(reportPath, Buffer.from(body, 'latin1').toString('utf-8'));
   }
 
