@@ -892,11 +892,16 @@ describe('diff mode reports findings the change introduced', () => {
     expect(res.stdout).toContain('no-console-error-only');
   });
 
-  // Identical findings are indistinguishable by fingerprint, so encounter order
-  // decided which one counted as pre-existing — and picked wrong. With a new
-  // finding at line 4 and an old one at line 12 it consumed the new one as old
-  // and reported line 12, which a baseline then hid entirely: a false clean.
-  it('reports the new occurrence, not an identical older one elsewhere', () => {
+  // Identical findings carry nothing that tells the copies apart. Encounter
+  // order picked wrong, and so did proximity to the change once a multiline
+  // finding's edited body sat far below its anchor — both reported the OLD
+  // occurrence, which is false blame on code the author never touched.
+  //
+  // So an ambiguous group falls back to anchor matching. That can still miss
+  // the new one, exactly as the previous release did, but it never points at
+  // the wrong line. Missing a finding is recoverable; blaming the wrong author
+  // is what gets a linter deleted.
+  it('never blames an older identical occurrence when the copies are ambiguous', () => {
     const two = (firstBody: string) =>
       `export function first() {\n  try {\n    return read();\n  } catch (err) {\n    ${firstBody}\n  }\n}\n` +
       `export function second() {\n  try {\n    return read();\n  } catch (err) {\n    console.error(err);\n  }\n}\n`;
@@ -904,8 +909,18 @@ describe('diff mode reports findings the change introduced', () => {
     writeFileSync(join(dir, 'f.ts'), two('console.error(err);'));
 
     const res = run(['--diff', '--format', 'compact', '--severity', 'warn', dir]);
-    expect(res.stdout).toContain('f.ts:4');
     expect(res.stdout).not.toContain('f.ts:12');
+  });
+
+  it('still reports a duplicate when the base had none of them', () => {
+    // Unambiguous: nothing equivalent existed before, so both are new.
+    const dir = repo({ 'f.ts': 'export const ok = 1;\n' });
+    const block = (name: string) =>
+      `export function ${name}() {\n  try {\n    return read();\n  } catch (err) {\n    console.error(err);\n  }\n}\n`;
+    writeFileSync(join(dir, 'f.ts'), block('first') + block('second'));
+
+    const res = run(['--diff', '--format', 'compact', '--severity', 'warn', dir]);
+    expect(res.stdout.match(/no-console-error-only/g)?.length).toBe(2);
   });
 
   it('keeps the base through the --fix rescan', () => {

@@ -261,7 +261,9 @@ function baseFindingsFor(
   // The same size cap the filesystem path applies. Base content came straight
   // from git and skipped it, so a huge blob at HEAD made every scan of a small
   // working copy pay to lint megabytes it would never have read from disk.
-  if (before.length > MAX_FILE_SIZE) return null;
+  // Bytes, not UTF-16 code units: multibyte content is up to 3x larger on
+  // disk than `.length` suggests, so a 1.2MB blob was slipping through.
+  if (Buffer.byteLength(before, 'utf-8') > MAX_FILE_SIZE) return null;
   const r = scanContentDetailed(before, path, config);
   // Suppressed findings are budgeted separately. Measuring them against the
   // findings budget made old suppressed entries resurface on an unrelated edit.
@@ -292,10 +294,6 @@ function selectForDiff(
     groups.set(key, list);
   }
 
-  const changed = [...changedLines];
-  const distanceToChange = (f: Finding) =>
-    changed.reduce((best, l) => Math.min(best, Math.abs(l - f.line)), Number.POSITIVE_INFINITY);
-
   const kept = new Set<Finding>();
   for (const [key, list] of groups) {
     const already = baseCount.get(key) ?? 0;
@@ -304,15 +302,23 @@ function selectForDiff(
     for (const f of list) if (changedLines.has(f.line)) kept.add(f);
     if (introduced <= 0) continue;
 
-    // The file gained findings of this kind, so `introduced` of them are new.
-    // Pick the ones nearest a changed line: identical findings are otherwise
-    // indistinguishable, and encounter order picked wrong — with a new finding
-    // at line 4 and an old one at line 12 it consumed the new one as
-    // pre-existing and reported the old, which a baseline then hid entirely.
-    const candidates = list
-      .filter((f) => !changedLines.has(f.line))
-      .sort((a, b) => distanceToChange(a) - distanceToChange(b));
-    for (const f of candidates.slice(0, introduced)) kept.add(f);
+    const candidates = list.filter((f) => !changedLines.has(f.line));
+
+    // With no equivalent in the base, every one of these is new and there is
+    // nothing to guess about.
+    if (already === 0) {
+      for (const f of candidates) kept.add(f);
+      continue;
+    }
+
+    // Otherwise the file already had findings of this kind and gained more, and
+    // identical findings carry nothing that tells the copies apart. Guessing by
+    // proximity blamed the wrong one whenever a multiline finding's changed
+    // body sat far below its anchor. Fall back to anchor matching for the
+    // group, which is what the previous release did: it can still miss the new
+    // one, but it never points at code the author did not touch.
+    if (candidates.length > 1) continue;
+    for (const f of candidates) kept.add(f);
   }
 
   return found.filter((f) => kept.has(f));

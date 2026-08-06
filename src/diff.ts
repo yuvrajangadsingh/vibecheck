@@ -434,10 +434,13 @@ export function getIndexContents(repoRoot: string, scanRoot: string, paths: stri
   try {
     batch = execFileSync(
       'git',
-      ['cat-file', '--batch=%(objectname) %(objecttype) %(objectsize)'],
+      ['cat-file', '-z', '--batch=%(objectname) %(objecttype) %(objectsize)'],
       {
         cwd: realRepoRoot,
-        input: [...repoPathFor.values()].map((p) => `:${p}`).join('\n') + '\n',
+        // NUL-delimited: a filename may legally contain a newline, and
+        // newline-delimited requests let such a name corrupt the framing of
+        // every response after it.
+        input: [...repoPathFor.values()].map((p) => `:${p}`).join('\0') + '\0',
         encoding: 'latin1',
         maxBuffer: 256 * 1024 * 1024,
         stdio: ['pipe', 'pipe', 'ignore'],
@@ -457,11 +460,16 @@ export function getIndexContents(repoRoot: string, scanRoot: string, paths: stri
     const header = batch.slice(cursor, nl);
     cursor = nl + 1;
 
-    if (/\bmissing$/.test(header) || / (ambiguous|dangling)$/.test(header)) {
+    if (/\bmissing$/.test(header)) {
       // Absent from the index means the file is new, so everything in it is
-      // introduced. Only a NEW file may be treated that way — a lookup that
-      // failed for any other reason must not silently read as "all new".
+      // introduced.
       out.set(reportPath, '');
+      continue;
+    }
+    if (/ (ambiguous|dangling)$/.test(header)) {
+      // We could not resolve it. That is not evidence the file is new, and
+      // treating it as new would blame the author for everything in it. Leave
+      // it unset so this file falls back to anchor matching.
       continue;
     }
 
