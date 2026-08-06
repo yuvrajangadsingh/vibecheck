@@ -215,6 +215,23 @@ that is what the baseline is for.
 
 ### What diff mode can and cannot see
 
+Diff mode reports a finding when the line it is anchored to changed, **or when
+your change introduced it**. The file is scanned as it was before the change
+too, so an edit that creates a problem is reported even when the line it is
+reported on did not move:
+
+```ts
+  } catch (err) {          // <- reported here
+    console.error(err);    // <- the only line you changed
+  }
+```
+
+That also covers a function crossing the length threshold, whose declaration
+never changed, and a build-time guard removed from above an untouched
+`console.log`. It deliberately does not resurface a finding that was already
+there: editing one line inside a function that was already too long stays
+quiet, because that debt is not yours.
+
 `--staged` reads the **index**, not the working tree, so a file staged and then
 edited is checked as it will be committed. `--diff-stdin` verifies the piped
 diff describes the files being scanned, using the blob hashes in its `index`
@@ -236,8 +253,14 @@ Known limitations, all needing non-default git configuration:
   scan refuses it.
 - A stream that **modifies then deletes** the same file is not refused the way
   other multi-patch streams are.
-- Diff mode reports findings on **changed lines**. A multiline finding whose
-  anchor line did not change is not reported, even when your edit created it.
+- A **deletion-only** change is invisible: only added lines enter the diff map,
+  so deleting a line that creates a finding reports nothing.
+- A staged move below git's **rename-similarity threshold** arrives as an add
+  plus a delete, so the destination reads as a new file.
+- When a file already contains an identical finding and gains another, the
+  copies cannot be told apart, so that group falls back to changed-line
+  matching and the new one may go unreported. A baseline can hide it for the
+  same reason.
 
 **Not available in diff mode.** `--score`, `--min-score` and `--badge` refuse to
 run alongside `--diff`, `--staged` or `--diff-stdin`. The score is findings per

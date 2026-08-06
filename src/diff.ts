@@ -402,3 +402,91 @@ export function findDiffContentMismatches(
 
   return mismatched;
 }
+
+/**
+ * Content of each changed file as it was BEFORE the working-tree edits.
+ *
+ * For unstaged `--diff` that is the index copy, which is what `git diff`
+ * compares against. Files with no index entry are new, and map to empty
+ * content so every finding in them counts as introduced.
+ *
+ * Used to tell "your change created this finding" from "this was already
+ * here", which line numbers alone cannot express for a multiline rule whose
+ * anchor sits above the line you touched.
+ */
+export function getIndexContents(repoRoot: string, scanRoot: string, paths: string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  if (paths.length === 0) return out;
+
+  const realRepoRoot = realpathOrSelf(repoRoot);
+  const realScanRoot = realpathOrSelf(scanRoot);
+
+  const repoPathFor = new Map<string, string>();
+  for (const reportPath of paths) {
+    const abs = resolve(realScanRoot, reportPath);
+    repoPathFor.set(reportPath, relative(realRepoRoot, abs).split(sep).join('/'));
+  }
+
+  // One `cat-file --batch` process for the whole change set. Spawning `git
+  // show` per file cost 13x on a 250-file diff (0.9s -> 11.8s), which is not a
+  // price worth paying for a linter that runs on every commit.
+  let batch: string;
+  try {
+    batch = execFileSync(
+      'git',
+      ['cat-file', '-z', '--batch=%(objectname) %(objecttype) %(objectsize)'],
+      {
+        cwd: realRepoRoot,
+        // NUL-delimited: a filename may legally contain a newline, and
+        // newline-delimited requests let such a name corrupt the framing of
+        // every response after it.
+        input: [...repoPathFor.values()].map((p) => `:${p}`).join('\0') + '\0',
+        encoding: 'latin1',
+        maxBuffer: 256 * 1024 * 1024,
+        stdio: ['pipe', 'pipe', 'ignore'],
+      }
+    );
+  } catch {
+    return out; // no usable base; callers fall back to anchor matching
+  }
+
+  // Responses come back in request order: a header line, then the payload, or
+  // "<spec> missing" for anything the index does not have.
+  const reportPaths = [...repoPathFor.keys()];
+  let cursor = 0;
+  for (const reportPath of reportPaths) {
+    const nl = batch.indexOf('\n', cursor);
+    if (nl === -1) break;
+    const header = batch.slice(cursor, nl);
+    cursor = nl + 1;
+
+    if (/\bmissing$/.test(header)) {
+      // Absent from the index means the file is new, so everything in it is
+      // introduced.
+      out.set(reportPath, '');
+      continue;
+    }
+    if (/ (ambiguous|dangling)$/.test(header)) {
+      // We could not resolve it. That is not evidence the file is new, and
+      // treating it as new would blame the author for everything in it. Leave
+      // it unset so this file falls back to anchor matching.
+      continue;
+    }
+
+    const size = Number(header.slice(header.lastIndexOf(' ') + 1));
+    if (!Number.isFinite(size)) break;
+    const body = batch.slice(cursor, cursor + size);
+    cursor += size + 1; // payload plus its trailing newline
+
+    // An empty index blob is what `git add -N` writes, which is how an unstaged
+    // rename shows up. Treating that as the real "before" made every finding in
+    // a moved file look introduced — false blame on code the author only moved.
+    // Leaving the entry unset falls back to anchor matching, which is what the
+    // previous release did for these files anyway.
+    if (size === 0) continue;
+
+    out.set(reportPath, Buffer.from(body, 'latin1').toString('utf-8'));
+  }
+
+  return out;
+}

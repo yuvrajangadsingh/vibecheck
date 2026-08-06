@@ -793,3 +793,176 @@ describe('--diff-stdin verifies the checkout matches the diff', () => {
     expect(res.status).toBe(0);
   });
 });
+
+// Diff mode kept only findings whose ANCHOR line changed. Multiline rules
+// report where a construct starts, so an edit could create a finding and have
+// it dropped. Scanning the pre-change file too lets us ask the question that
+// matters — did this change introduce it — instead of guessing from line
+// numbers.
+describe('diff mode reports findings the change introduced', () => {
+  const dirs: string[] = [];
+  function repo(files: Record<string, string>): string {
+    const dir = mkdtempSync(join(tmpdir(), 'vibecheck-cli-intro-'));
+    dirs.push(dir);
+    const git = (cmd: string) => execSync(`git ${cmd}`, { cwd: dir, stdio: 'ignore' });
+    git('init -q .');
+    git('config user.email t@t');
+    git('config user.name t');
+    for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, name), body);
+    git('add .');
+    git('commit -qm init');
+    return dir;
+  }
+  const bigFn = (n: number) =>
+    `export function grow() {\n${Array.from({ length: n }, (_, i) => `  const v${i} = ${i};`).join('\n')}\n  return 1;\n}\n`;
+
+  afterAll(() => {
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  it('reports a multiline finding created by an edit below its anchor', () => {
+    const dir = repo({
+      'f.ts': 'export function load() {\n  try {\n    return read();\n  } catch (err) {\n    return fallback();\n  }\n}\n',
+    });
+    // Only line 5 changes; the finding is anchored on line 4.
+    writeFileSync(
+      join(dir, 'f.ts'),
+      'export function load() {\n  try {\n    return read();\n  } catch (err) {\n    console.error(err);\n  }\n}\n'
+    );
+    const res = run(['--diff', '--format', 'compact', '--severity', 'warn', dir]);
+    expect(res.stdout).toContain('no-console-error-only');
+    expect(res.stdout).toContain('f.ts:4');
+  });
+
+  it('reports a function that crossed the length threshold, anchored on an untouched line', () => {
+    const dir = repo({ 'h.ts': bigFn(77) });
+    const lines = bigFn(77).split('\n');
+    lines.splice(78, 0, '  const a = 1;', '  const b = 2;', '  const c = 3;');
+    writeFileSync(join(dir, 'h.ts'), lines.join('\n'));
+
+    const res = run(['--diff', '--format', 'compact', '--severity', 'warn', dir]);
+    // The declaration on line 1 never changed; the finding is new all the same.
+    expect(res.stdout).toContain('no-god-function');
+    expect(res.stdout).toContain('h.ts:1');
+  });
+
+  // The reason this is not simply "match the whole span": a long function would
+  // otherwise warn on every PR that touched one line of it, forever, for code
+  // the author did not write.
+  it('stays quiet when an edit lands inside an already-too-long function', () => {
+    const dir = repo({ 'g.ts': bigFn(120) });
+    writeFileSync(join(dir, 'g.ts'), bigFn(120).replace('const v5 = 5;', 'const v5 = 500;'));
+
+    const res = run(['--diff', '--format', 'compact', '--severity', 'warn', dir]);
+    expect(res.stdout).not.toContain('no-god-function');
+    expect(res.status).toBe(0);
+  });
+
+  // The base copy of a renamed file lives under its OLD name. Looking it up
+  // under the new one found nothing, so every pre-existing finding in a renamed
+  // file read as newly introduced — false blame, which is worse than the bug
+  // this feature fixes.
+  it('does not blame a renamed file for findings it already had', () => {
+    const dir = repo({
+      'old.ts': 'export function load() {\n  try {\n    return read();\n  } catch (err) {\n    console.error(err);\n  }\n}\n',
+    });
+    execSync('git mv old.ts new.ts', { cwd: dir, stdio: 'ignore' });
+    writeFileSync(
+      join(dir, 'new.ts'),
+      'export function load() {\n  try {\n    return readTwice();\n  } catch (err) {\n    console.error(err);\n  }\n}\n'
+    );
+    execSync('git add new.ts', { cwd: dir, stdio: 'ignore' });
+
+    const res = run(['--staged', '--format', 'compact', '--severity', 'warn', dir]);
+    expect(res.stdout).not.toContain('no-console-error-only');
+  });
+
+  it('still reports a finding a rename introduced', () => {
+    const dir = repo({
+      'old.ts': 'export function load() {\n  try {\n    return read();\n  } catch (err) {\n    return fallback();\n  }\n}\n',
+    });
+    execSync('git mv old.ts new.ts', { cwd: dir, stdio: 'ignore' });
+    writeFileSync(
+      join(dir, 'new.ts'),
+      'export function load() {\n  try {\n    return read();\n  } catch (err) {\n    console.error(err);\n  }\n}\n'
+    );
+    execSync('git add new.ts', { cwd: dir, stdio: 'ignore' });
+
+    const res = run(['--staged', '--format', 'compact', '--severity', 'warn', dir]);
+    expect(res.stdout).toContain('no-console-error-only');
+  });
+
+  // Identical findings carry nothing that tells the copies apart. Encounter
+  // order picked wrong, and so did proximity to the change once a multiline
+  // finding's edited body sat far below its anchor — both reported the OLD
+  // occurrence, which is false blame on code the author never touched.
+  //
+  // So an ambiguous group falls back to anchor matching. That can still miss
+  // the new one, exactly as the previous release did, but it never points at
+  // the wrong line. Missing a finding is recoverable; blaming the wrong author
+  // is what gets a linter deleted.
+  it('never blames an older identical occurrence when the copies are ambiguous', () => {
+    const two = (firstBody: string) =>
+      `export function first() {\n  try {\n    return read();\n  } catch (err) {\n    ${firstBody}\n  }\n}\n` +
+      `export function second() {\n  try {\n    return read();\n  } catch (err) {\n    console.error(err);\n  }\n}\n`;
+    const dir = repo({ 'f.ts': two('return fallback();') });
+    writeFileSync(join(dir, 'f.ts'), two('console.error(err);'));
+
+    const res = run(['--diff', '--format', 'compact', '--severity', 'warn', dir]);
+    expect(res.stdout).not.toContain('f.ts:12');
+  });
+
+  it('still reports a duplicate when the base had none of them', () => {
+    // Unambiguous: nothing equivalent existed before, so both are new.
+    const dir = repo({ 'f.ts': 'export const ok = 1;\n' });
+    const block = (name: string) =>
+      `export function ${name}() {\n  try {\n    return read();\n  } catch (err) {\n    console.error(err);\n  }\n}\n`;
+    writeFileSync(join(dir, 'f.ts'), block('first') + block('second'));
+
+    const res = run(['--diff', '--format', 'compact', '--severity', 'warn', dir]);
+    expect(res.stdout.match(/no-console-error-only/g)?.length).toBe(2);
+  });
+
+  it('keeps the base through the --fix rescan', () => {
+    const dir = repo({
+      'f.ts': 'export function load() {\n  try {\n    return read();\n  } catch (err) {\n    return fallback();\n  }\n}\n',
+    });
+    // A fixable attribution line plus a finding introduced below an unchanged
+    // anchor. The rescan used to lose the base and drop the second one.
+    writeFileSync(
+      join(dir, 'f.ts'),
+      '// Generated by ChatGPT\nexport function load() {\n  try {\n    return read();\n  } catch (err) {\n    console.error(err);\n  }\n}\n'
+    );
+
+    const res = run(['--diff', '--fix', '--format', 'compact', '--severity', 'warn', '--fail-on', 'warn', dir]);
+    expect(res.stdout).toContain('no-console-error-only');
+    expect(res.status).toBe(1);
+  });
+
+  it('does not resurface an old suppressed finding after an unrelated edit', () => {
+    const dir = repo({
+      'f.ts': '// vibecheck-disable-next-line no-eval\nconst bad = eval(payload);\nconst safe = 1;\n',
+    });
+    writeFileSync(
+      join(dir, 'f.ts'),
+      '// vibecheck-disable-next-line no-eval\nconst bad = eval(payload);\nconst safe = 2;\n'
+    );
+
+    const res = run(['--diff', '--show-suppressed', '--severity', 'warn', dir]);
+    expect(res.stdout).not.toContain('no-eval');
+  });
+
+  it('applies the same rule to --staged', () => {
+    const dir = repo({
+      'f.ts': 'export function load() {\n  try {\n    return read();\n  } catch (err) {\n    return fallback();\n  }\n}\n',
+    });
+    writeFileSync(
+      join(dir, 'f.ts'),
+      'export function load() {\n  try {\n    return read();\n  } catch (err) {\n    console.error(err);\n  }\n}\n'
+    );
+    execSync('git add f.ts', { cwd: dir, stdio: 'ignore' });
+
+    const res = run(['--staged', '--format', 'compact', '--severity', 'warn', dir]);
+    expect(res.stdout).toContain('no-console-error-only');
+  });
+});

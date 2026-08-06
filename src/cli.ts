@@ -16,7 +16,7 @@ import { formatSarif } from './sarif.js';
 import { computeScore, formatScore } from './score.js';
 import { badgeFor } from './badge.js';
 import { BASELINE_FILENAME, loadBaseline, writeBaseline, partitionBaseline } from './baseline.js';
-import { getGitDiff, getGitRoot, resolveDiffPaths, parseDiff, shiftDiffMap, realpathOrSelf, parseDiffBlobs, findDiffContentMismatches} from './diff.js';
+import { getGitDiff, getGitRoot, resolveDiffPaths, parseDiff, shiftDiffMap, realpathOrSelf, parseDiffBlobs, findDiffContentMismatches, getIndexContents} from './diff.js';
 import { allRules, allMultilineRules } from './rules/index.js';
 import type { Severity } from './types.js';
 import type { DiffMap } from './diff.js';
@@ -243,6 +243,7 @@ const program = new Command()
     // Diff mode: changed lines from git, or from a unified diff piped to stdin
     let diffMap: DiffMap | undefined;
     let stagedSnapshot: StagedSnapshot | undefined;
+    let gitRootForBase: string | undefined;
     if (options.diffStdin) {
       if (process.stdin.isTTY) {
         console.error('Error: --diff-stdin expects a unified diff on stdin (e.g. git diff | vibecheck --diff-stdin .).');
@@ -318,6 +319,7 @@ const program = new Command()
     } else if (options.diff) {
       try {
         const repoRoot = getGitRoot(scanRoot);
+        gitRootForBase = repoRoot;
         const rawDiff = getGitDiff(repoRoot, false);
         diffMap = resolveDiffPaths(rawDiff, repoRoot, scanRoot);
       } catch (err) {
@@ -337,17 +339,32 @@ const program = new Command()
       return; // exitCode stays 0; returning lets stdout flush before exit
     }
 
-    let result;
-    try {
-      result = stagedSnapshot
-        ? await scan(scanRoot, config, undefined, {
+    // Computed once so the post-fix rescan uses the same base. Dropping it
+    // there fell back to anchor-only matching, and a finding the change
+    // introduced below an unchanged anchor vanished: --diff --fix exited clean.
+    let baseForScan: Map<string, string> | undefined;
+    const runScan = () =>
+      stagedSnapshot
+        ? scan(scanRoot, config, undefined, {
             contents: stagedSnapshot.files.map((f) => ({
               path: f.reportPath,
               content: f.content,
               changedLines: f.changedLines,
             })),
+            baseContents: new Map(stagedSnapshot.files.map((f) => [f.reportPath, f.baseContent])),
           })
-        : await scan(scanRoot, config, diffMap, { files: explicitFiles });
+        : scan(scanRoot, config, diffMap, { files: explicitFiles, baseContents: baseForScan });
+
+    let result;
+    try {
+      // Only for unstaged --diff: `git diff` compares against the index, so
+      // the index copy is the "before". A diff piped in on stdin has no
+      // reliable base to fetch, so that mode keeps anchor matching.
+      baseForScan =
+        diffMap && options.diff
+          ? getIndexContents(gitRootForBase ?? scanRoot, scanRoot, [...diffMap.keys()])
+          : undefined;
+      result = await runScan();
     } catch (err) {
       console.error(`Error: scan failed for "${targetPath}".`, err instanceof Error ? err.message : '');
       process.exit(2);
@@ -364,15 +381,7 @@ const program = new Command()
           // at the wrong ones. Shift it by what was actually removed rather
           // than reusing it, which silently dropped shifted findings.
           if (diffMap) diffMap = shiftDiffMap(diffMap, fixResult.fixedFindings);
-          result = stagedSnapshot
-        ? await scan(scanRoot, config, undefined, {
-            contents: stagedSnapshot.files.map((f) => ({
-              path: f.reportPath,
-              content: f.content,
-              changedLines: f.changedLines,
-            })),
-          })
-        : await scan(scanRoot, config, diffMap, { files: explicitFiles });
+          result = await runScan();
         } catch {
           // keep pre-rescan result if the second pass fails
         }

@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { parseDiff, resolveDiffPaths, shiftDiffMap } from '../src/diff.js';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { parseDiff, resolveDiffPaths, shiftDiffMap, getIndexContents } from '../src/diff.js';
+import { execSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 describe('parseDiff', () => {
   it('parses a simple unified diff', () => {
@@ -259,5 +263,56 @@ describe('shiftDiffMap', () => {
 
   it('returns the map untouched when nothing was removed', () => {
     expect(lines(shiftDiffMap(map({ a: [1, 2] }), []), 'a')).toEqual([1, 2]);
+  });
+});
+
+// Base content is read with one `git cat-file --batch` process, because a
+// `git show` per file cost 13x on a 250-file diff. The response framing is
+// parsed by hand, so the cursor arithmetic gets its own tests.
+describe('getIndexContents batch parsing', () => {
+  const FILES: Record<string, string> = {
+    'plain.ts': 'export const a = 1;\n',
+    'crlf.ts': 'export const a = 1;\r\nexport const b = 2;\r\n',
+    'nonl.ts': 'export const a = 1;', // no trailing newline
+    'fakehdr.ts': 'const s = "abc123 blob 999";\nexport const x = 1;\n', // mimics a batch header
+    'unicode.ts': 'export const s = "café 日本語 🔥";\n',
+    'big.ts': 'export const a = 1;\n'.repeat(20_000),
+    'empty.ts': '',
+  };
+  let dir: string;
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'vibecheck-batch-'));
+    const git = (cmd: string) => execSync(`git ${cmd}`, { cwd: dir, stdio: 'ignore' });
+    git('init -q .');
+    git('config user.email t@t');
+    git('config user.name t');
+    for (const [name, body] of Object.entries(FILES)) writeFileSync(join(dir, name), body);
+    git('add .');
+    git('commit -qm init');
+  });
+
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('reads every blob back byte for byte, with a missing path mid-stream', () => {
+    const paths = ['plain.ts', 'crlf.ts', 'MISSING.ts', 'nonl.ts', 'fakehdr.ts', 'unicode.ts', 'big.ts'];
+    const got = getIndexContents(dir, dir, paths);
+
+    for (const name of paths) {
+      // A path absent from the index is a new file: empty base, all of it new.
+      expect(got.get(name), name).toBe(name === 'MISSING.ts' ? '' : FILES[name]);
+    }
+  });
+
+  it('treats a genuinely empty blob as no base rather than empty content', () => {
+    // `git add -N` writes an empty blob, which is how an unstaged rename shows
+    // up. Reading it as the real "before" blamed the author for moved code.
+    expect(getIndexContents(dir, dir, ['empty.ts']).get('empty.ts')).toBeUndefined();
+  });
+
+  it('returns an empty map rather than throwing outside a git repo', () => {
+    const bare = mkdtempSync(join(tmpdir(), 'vibecheck-nogit-'));
+    expect(() => getIndexContents(bare, bare, ['x.ts'])).not.toThrow();
+    rmSync(bare, { recursive: true, force: true });
   });
 });

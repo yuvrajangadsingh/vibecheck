@@ -6,6 +6,7 @@ import { maskLines } from './lexer.js';
 import { parseSuppressions, isSuppressed } from './suppressions.js';
 import type { Config, Finding, ScanResult, Severity, SkippedFile} from './types.js';
 import type { DiffMap } from './diff.js';
+import { findingFingerprint } from './fingerprint.js';
 
 const MAX_FILE_SIZE = 1_000_000; // 1MB
 const VALID_SEVERITIES: Severity[] = ['error', 'warn', 'info'];
@@ -221,7 +222,107 @@ export type ScanOptions = {
    * tree may hold something entirely different.
    */
   contents?: { path: string; content: string; changedLines?: Set<number> }[];
+  /**
+   * The content of each changed file BEFORE the change, keyed by the same path
+   * used for reporting.
+   *
+   * Diff mode used to keep only findings whose anchor line changed. Multiline
+   * rules report at the line a construct STARTS on, so an edit could create a
+   * finding and have it dropped: changing a catch body from returning to
+   * logging creates no-console-error-only, anchored on the unchanged `catch`
+   * line, and diff mode called that clean.
+   *
+   * With the previous content we can ask the question that actually matters —
+   * did this change INTRODUCE the finding — instead of guessing from line
+   * numbers. Anchored-line matching stays as-is, so nothing that used to be
+   * reported stops being reported.
+   */
+  baseContents?: Map<string, string>;
 };
+
+/**
+ * Decide which findings survive diff filtering.
+ *
+ * Keeps a finding when its anchor is on a changed line (the old behaviour), or
+ * when the file did not already contain an equivalent finding before the
+ * change. Identity is the existing fingerprint (rule + path + snippet), which
+ * carries no line number and no message, so a function crossing the length
+ * threshold counts as introduced while one that was already too long does not
+ * resurface every time somebody edits its body.
+ */
+/** Scan the pre-change content of a file, when we have it. */
+function baseFindingsFor(
+  path: string,
+  config: Config,
+  baseContents: Map<string, string> | undefined
+): { findings: Finding[]; suppressed: Finding[] } | null {
+  const before = baseContents?.get(path);
+  if (before === undefined) return null;
+  // The same size cap the filesystem path applies. Base content came straight
+  // from git and skipped it, so a huge blob at HEAD made every scan of a small
+  // working copy pay to lint megabytes it would never have read from disk.
+  // Bytes, not UTF-16 code units: multibyte content is up to 3x larger on
+  // disk than `.length` suggests, so a 1.2MB blob was slipping through.
+  if (Buffer.byteLength(before, 'utf-8') > MAX_FILE_SIZE) return null;
+  const r = scanContentDetailed(before, path, config);
+  // Suppressed findings are budgeted separately. Measuring them against the
+  // findings budget made old suppressed entries resurface on an unrelated edit.
+  return { findings: r.findings, suppressed: r.suppressed };
+}
+
+function selectForDiff(
+  found: Finding[],
+  changedLines: Set<number> | undefined,
+  baseFindings: Finding[] | null
+): Finding[] {
+  if (!changedLines) return found;
+  if (!baseFindings) return found.filter((f) => changedLines.has(f.line));
+
+  const baseCount = new Map<string, number>();
+  for (const f of baseFindings) {
+    const key = findingFingerprint(f);
+    baseCount.set(key, (baseCount.get(key) ?? 0) + 1);
+  }
+
+  // Group by identity, because deciding which occurrence is the new one is
+  // only meaningful within a group of identical findings.
+  const groups = new Map<string, Finding[]>();
+  for (const f of found) {
+    const key = findingFingerprint(f);
+    const list = groups.get(key) ?? [];
+    list.push(f);
+    groups.set(key, list);
+  }
+
+  const kept = new Set<Finding>();
+  for (const [key, list] of groups) {
+    const already = baseCount.get(key) ?? 0;
+    const introduced = list.length - already;
+
+    for (const f of list) if (changedLines.has(f.line)) kept.add(f);
+    if (introduced <= 0) continue;
+
+    const candidates = list.filter((f) => !changedLines.has(f.line));
+
+    // With no equivalent in the base, every one of these is new and there is
+    // nothing to guess about.
+    if (already === 0) {
+      for (const f of candidates) kept.add(f);
+      continue;
+    }
+
+    // Otherwise the file already had findings of this kind and gained more, and
+    // identical findings carry nothing that tells the copies apart. Guessing by
+    // proximity blamed the wrong one whenever a multiline finding's changed
+    // body sat far below its anchor. Fall back to anchor matching for the
+    // group, which is what the previous release did: it can still miss the new
+    // one, but it never points at code the author did not touch.
+    if (candidates.length > 1) continue;
+    for (const f of candidates) kept.add(f);
+  }
+
+  return found.filter((f) => kept.has(f));
+}
 
 export async function scan(
   targetPath: string,
@@ -273,14 +374,11 @@ export async function scan(
         if (line.trim()) linesScanned++;
       }
       const fileResult = scanContentDetailed(item.content, item.path, config);
-      for (const f of fileResult.findings) {
-        if (item.changedLines && !item.changedLines.has(f.line)) continue;
-        findings.push(f);
-      }
-      for (const f of fileResult.suppressed) {
-        if (item.changedLines && !item.changedLines.has(f.line)) continue;
-        suppressed.push(f);
-      }
+      const base = baseFindingsFor(item.path, config, options.baseContents);
+      findings.push(...selectForDiff(fileResult.findings, item.changedLines, base?.findings ?? null));
+      suppressed.push(
+        ...selectForDiff(fileResult.suppressed, item.changedLines, base?.suppressed ?? null)
+      );
     }
     return finish();
   }
@@ -341,15 +439,11 @@ export async function scan(
     }
 
     const fileResult = scanContentDetailed(content, relPath, config);
-    for (const f of fileResult.findings) {
-      // In diff mode, keep only findings on changed lines
-      if (changedLines && !changedLines.has(f.line)) continue;
-      findings.push(f);
-    }
-    for (const f of fileResult.suppressed) {
-      if (changedLines && !changedLines.has(f.line)) continue;
-      suppressed.push(f);
-    }
+    const base = baseFindingsFor(relPath, config, options.baseContents);
+    findings.push(...selectForDiff(fileResult.findings, changedLines, base?.findings ?? null));
+    suppressed.push(
+      ...selectForDiff(fileResult.suppressed, changedLines, base?.suppressed ?? null)
+    );
   }
 
   return finish();
