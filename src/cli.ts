@@ -461,7 +461,13 @@ const program = new Command()
           `vibecheck: cannot scan staged ${pr.repoPath} (${pr.reason}${pr.detail ? `: ${pr.detail}` : ''}).\n`
         );
       }
-      process.exit(2);
+      // exitCode, not exit(): stdout to a PIPE is asynchronous in node, so
+      // exiting here discards whatever has not drained yet. A --format json
+      // report of a large repo came out truncated at the pipe buffer, silently
+      // and with no error, which is exactly the kind of quiet data loss this
+      // release line exists to remove.
+      process.exitCode = 2;
+      return;
     }
 
     // A file the scanner could not read is not a file that passed. Report every
@@ -487,7 +493,13 @@ const program = new Command()
         `vibecheck: ${skipped.length} file${skipped.length === 1 ? '' : 's'} could not be scanned, so this run cannot vouch for the codebase.\n`
       );
       process.stderr.write('vibecheck: add them to "ignore" in your config if that is intentional.\n');
-      process.exit(2);
+      // exitCode, not exit(): stdout to a PIPE is asynchronous in node, so
+      // exiting here discards whatever has not drained yet. A --format json
+      // report of a large repo came out truncated at the pipe buffer, silently
+      // and with no error, which is exactly the kind of quiet data loss this
+      // release line exists to remove.
+      process.exitCode = 2;
+      return;
     }
 
     // Exit code: 1 when findings at or above --fail-on exist, or --max-warnings is exceeded.
@@ -512,7 +524,8 @@ const program = new Command()
           process.stderr.write(`vibecheck: wrote ${options.badge} (${scored.score}/100, ${scored.grade}).\n`);
         } catch (err) {
           console.error(`Error: could not write ${options.badge}: ${err instanceof Error ? err.message : err}`);
-          process.exit(2);
+          process.exitCode = 2;
+          return;
         }
       }
       // json embeds the score in its payload; every other format, sarif

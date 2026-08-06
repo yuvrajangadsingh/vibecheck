@@ -966,3 +966,37 @@ describe('diff mode reports findings the change introduced', () => {
     expect(res.stdout).toContain('no-console-error-only');
   });
 });
+
+// stdout to a PIPE is asynchronous in node, so process.exit() throws away
+// whatever has not drained. The skip path exited that way AFTER printing the
+// report, so `vibecheck --format json . | jq` on a large repo returned
+// truncated invalid JSON, silently. Every test here runs through spawnSync,
+// which is a pipe, so the output has to be big enough to outrun the buffer.
+describe('output is never truncated by an exit', () => {
+  let dir: string;
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'vibecheck-cli-flush-'));
+    // Enough findings that the JSON report comfortably exceeds the 64KB pipe
+    // buffer, plus one unreadable file so the run takes the exit-2 skip path.
+    for (let i = 0; i < 60; i++) {
+      writeFileSync(
+        join(dir, `f${i}.ts`),
+        Array.from({ length: 30 }, (_, j) => `export const v${j} = eval(input${j});`).join('\n') + '\n'
+      );
+    }
+    writeFileSync(join(dir, 'huge.ts'), 'const a = 1;\n'.repeat(90_000)); // over the 1MB cap
+  });
+
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('emits complete JSON even when the run exits 2 for a skipped file', () => {
+    const res = run(['--format', 'json', '--fail-on', 'never', dir]);
+
+    expect(res.stderr).toContain('skipped huge.ts');
+    expect(res.status).toBe(2);
+    expect(res.stdout.length).toBeGreaterThan(100_000); // past the pipe buffer
+    expect(() => JSON.parse(res.stdout)).not.toThrow();
+    expect(JSON.parse(res.stdout).findings.length).toBe(60 * 30);
+  });
+});
