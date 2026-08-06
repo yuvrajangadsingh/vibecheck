@@ -255,10 +255,17 @@ function baseFindingsFor(
   path: string,
   config: Config,
   baseContents: Map<string, string> | undefined
-): Finding[] | null {
+): { findings: Finding[]; suppressed: Finding[] } | null {
   const before = baseContents?.get(path);
   if (before === undefined) return null;
-  return scanContentDetailed(before, path, config).findings;
+  // The same size cap the filesystem path applies. Base content came straight
+  // from git and skipped it, so a huge blob at HEAD made every scan of a small
+  // working copy pay to lint megabytes it would never have read from disk.
+  if (before.length > MAX_FILE_SIZE) return null;
+  const r = scanContentDetailed(before, path, config);
+  // Suppressed findings are budgeted separately. Measuring them against the
+  // findings budget made old suppressed entries resurface on an unrelated edit.
+  return { findings: r.findings, suppressed: r.suppressed };
 }
 
 function selectForDiff(
@@ -269,26 +276,46 @@ function selectForDiff(
   if (!changedLines) return found;
   if (!baseFindings) return found.filter((f) => changedLines.has(f.line));
 
-  const budget = new Map<string, number>();
+  const baseCount = new Map<string, number>();
   for (const f of baseFindings) {
     const key = findingFingerprint(f);
-    budget.set(key, (budget.get(key) ?? 0) + 1);
+    baseCount.set(key, (baseCount.get(key) ?? 0) + 1);
   }
 
-  const kept: Finding[] = [];
+  // Group by identity, because deciding which occurrence is the new one is
+  // only meaningful within a group of identical findings.
+  const groups = new Map<string, Finding[]>();
   for (const f of found) {
     const key = findingFingerprint(f);
-    const preExisting = budget.get(key) ?? 0;
-    if (preExisting > 0) {
-      // Account for it whether or not we report it, so N copies before and
-      // N+1 after reports exactly the one that is new.
-      budget.set(key, preExisting - 1);
-      if (changedLines.has(f.line)) kept.push(f);
-      continue;
-    }
-    kept.push(f);
+    const list = groups.get(key) ?? [];
+    list.push(f);
+    groups.set(key, list);
   }
-  return kept;
+
+  const changed = [...changedLines];
+  const distanceToChange = (f: Finding) =>
+    changed.reduce((best, l) => Math.min(best, Math.abs(l - f.line)), Number.POSITIVE_INFINITY);
+
+  const kept = new Set<Finding>();
+  for (const [key, list] of groups) {
+    const already = baseCount.get(key) ?? 0;
+    const introduced = list.length - already;
+
+    for (const f of list) if (changedLines.has(f.line)) kept.add(f);
+    if (introduced <= 0) continue;
+
+    // The file gained findings of this kind, so `introduced` of them are new.
+    // Pick the ones nearest a changed line: identical findings are otherwise
+    // indistinguishable, and encounter order picked wrong — with a new finding
+    // at line 4 and an old one at line 12 it consumed the new one as
+    // pre-existing and reported the old, which a baseline then hid entirely.
+    const candidates = list
+      .filter((f) => !changedLines.has(f.line))
+      .sort((a, b) => distanceToChange(a) - distanceToChange(b));
+    for (const f of candidates.slice(0, introduced)) kept.add(f);
+  }
+
+  return found.filter((f) => kept.has(f));
 }
 
 export async function scan(
@@ -342,8 +369,10 @@ export async function scan(
       }
       const fileResult = scanContentDetailed(item.content, item.path, config);
       const base = baseFindingsFor(item.path, config, options.baseContents);
-      findings.push(...selectForDiff(fileResult.findings, item.changedLines, base));
-      suppressed.push(...selectForDiff(fileResult.suppressed, item.changedLines, base));
+      findings.push(...selectForDiff(fileResult.findings, item.changedLines, base?.findings ?? null));
+      suppressed.push(
+        ...selectForDiff(fileResult.suppressed, item.changedLines, base?.suppressed ?? null)
+      );
     }
     return finish();
   }
@@ -405,8 +434,10 @@ export async function scan(
 
     const fileResult = scanContentDetailed(content, relPath, config);
     const base = baseFindingsFor(relPath, config, options.baseContents);
-    findings.push(...selectForDiff(fileResult.findings, changedLines, base));
-    suppressed.push(...selectForDiff(fileResult.suppressed, changedLines, base));
+    findings.push(...selectForDiff(fileResult.findings, changedLines, base?.findings ?? null));
+    suppressed.push(
+      ...selectForDiff(fileResult.suppressed, changedLines, base?.suppressed ?? null)
+    );
   }
 
   return finish();

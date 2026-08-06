@@ -223,7 +223,7 @@ export function readStagedSnapshot(
     // content is right: everything in it counts as introduced.
     let baseContent = '';
     try {
-      baseContent = execFileSync('git', ['cat-file', 'blob', `${baseTree}:${entry.path}`], {
+      baseContent = execFileSync('git', ['cat-file', 'blob', `${baseTree}:${entry.srcPath ?? entry.path}`], {
         cwd: repoRoot,
         encoding: 'utf-8',
         maxBuffer: 64 * 1024 * 1024,
@@ -245,7 +245,7 @@ export function readStagedSnapshot(
   return { files, problems };
 }
 
-type RawEntry = { mode: string; oid: string; status: string; path: string };
+type RawEntry = { mode: string; oid: string; status: string; path: string; srcPath?: string };
 
 /**
  * Parse `git diff-tree --raw -z` records.
@@ -271,12 +271,17 @@ function parseRawZ(raw: string): RawEntry[] {
     const status = statusField[0];
 
     // R and C carry <source>\0<destination>; the destination is what got staged.
-    const pathIndex = status === 'R' || status === 'C' ? i + 2 : i + 1;
+    const renamed = status === 'R' || status === 'C';
+    const pathIndex = renamed ? i + 2 : i + 1;
     const path = parts[pathIndex];
+    // Keep the source path: the base copy of a renamed file lives under its OLD
+    // name, and looking it up under the new one found nothing, which made every
+    // pre-existing finding in a renamed file look newly introduced.
+    const srcPath = renamed ? parts[i + 1] : undefined;
     i = pathIndex;
     if (!path) continue;
 
-    out.push({ mode: dstMode, oid: dstOid, status, path });
+    out.push({ mode: dstMode, oid: dstOid, status, path, srcPath });
   }
 
   return out;

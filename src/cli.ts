@@ -339,10 +339,13 @@ const program = new Command()
       return; // exitCode stays 0; returning lets stdout flush before exit
     }
 
-    let result;
-    try {
-      result = stagedSnapshot
-        ? await scan(scanRoot, config, undefined, {
+    // Computed once so the post-fix rescan uses the same base. Dropping it
+    // there fell back to anchor-only matching, and a finding the change
+    // introduced below an unchanged anchor vanished: --diff --fix exited clean.
+    let baseForScan: Map<string, string> | undefined;
+    const runScan = () =>
+      stagedSnapshot
+        ? scan(scanRoot, config, undefined, {
             contents: stagedSnapshot.files.map((f) => ({
               path: f.reportPath,
               content: f.content,
@@ -350,16 +353,18 @@ const program = new Command()
             })),
             baseContents: new Map(stagedSnapshot.files.map((f) => [f.reportPath, f.baseContent])),
           })
-        : await scan(scanRoot, config, diffMap, {
-            files: explicitFiles,
-            // Only for unstaged --diff: `git diff` compares against the index,
-            // so the index copy is the "before". A diff piped in on stdin has
-            // no reliable base to fetch, so that mode keeps anchor matching.
-            baseContents:
-              diffMap && options.diff
-                ? getIndexContents(gitRootForBase ?? scanRoot, scanRoot, [...diffMap.keys()])
-                : undefined,
-          });
+        : scan(scanRoot, config, diffMap, { files: explicitFiles, baseContents: baseForScan });
+
+    let result;
+    try {
+      // Only for unstaged --diff: `git diff` compares against the index, so
+      // the index copy is the "before". A diff piped in on stdin has no
+      // reliable base to fetch, so that mode keeps anchor matching.
+      baseForScan =
+        diffMap && options.diff
+          ? getIndexContents(gitRootForBase ?? scanRoot, scanRoot, [...diffMap.keys()])
+          : undefined;
+      result = await runScan();
     } catch (err) {
       console.error(`Error: scan failed for "${targetPath}".`, err instanceof Error ? err.message : '');
       process.exit(2);
@@ -376,15 +381,7 @@ const program = new Command()
           // at the wrong ones. Shift it by what was actually removed rather
           // than reusing it, which silently dropped shifted findings.
           if (diffMap) diffMap = shiftDiffMap(diffMap, fixResult.fixedFindings);
-          result = stagedSnapshot
-        ? await scan(scanRoot, config, undefined, {
-            contents: stagedSnapshot.files.map((f) => ({
-              path: f.reportPath,
-              content: f.content,
-              changedLines: f.changedLines,
-            })),
-          })
-        : await scan(scanRoot, config, diffMap, { files: explicitFiles });
+          result = await runScan();
         } catch {
           // keep pre-rescan result if the second pass fails
         }
