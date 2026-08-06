@@ -402,3 +402,40 @@ export function findDiffContentMismatches(
 
   return mismatched;
 }
+
+/**
+ * Content of each changed file as it was BEFORE the working-tree edits.
+ *
+ * For unstaged `--diff` that is the index copy, which is what `git diff`
+ * compares against. Files with no index entry are new, and map to empty
+ * content so every finding in them counts as introduced.
+ *
+ * Used to tell "your change created this finding" from "this was already
+ * here", which line numbers alone cannot express for a multiline rule whose
+ * anchor sits above the line you touched.
+ */
+export function getIndexContents(repoRoot: string, scanRoot: string, paths: string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  const realRepoRoot = realpathOrSelf(repoRoot);
+  const realScanRoot = realpathOrSelf(scanRoot);
+
+  for (const reportPath of paths) {
+    const abs = resolve(realScanRoot, reportPath);
+    const repoPath = relative(realRepoRoot, abs).split(sep).join('/');
+    try {
+      out.set(
+        reportPath,
+        execFileSync('git', ['show', `:${repoPath}`], {
+          cwd: realRepoRoot,
+          encoding: 'utf-8',
+          maxBuffer: 64 * 1024 * 1024,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        })
+      );
+    } catch {
+      out.set(reportPath, ''); // not in the index: a new file, all of it is new
+    }
+  }
+
+  return out;
+}

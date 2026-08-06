@@ -48,6 +48,8 @@ export type StagedFile = {
   /** Relative to the scan root — what findings and baselines print. */
   reportPath: string;
   content: string;
+  /** The same file at HEAD, so we can tell an introduced finding from an old one. */
+  baseContent: string;
   changedLines: Set<number>;
 };
 
@@ -217,10 +219,25 @@ export function readStagedSnapshot(
     const changedLines = lineMap.get(entry.path);
     if (!changedLines || changedLines.size === 0) continue;
 
+    // The same path at the base tree. Absent means the file is new, so empty
+    // content is right: everything in it counts as introduced.
+    let baseContent = '';
+    try {
+      baseContent = execFileSync('git', ['cat-file', 'blob', `${baseTree}:${entry.path}`], {
+        cwd: repoRoot,
+        encoding: 'utf-8',
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+    } catch {
+      baseContent = '';
+    }
+
     files.push({
       repoPath: entry.path,
       reportPath,
       content: raw_content.toString('utf-8'),
+      baseContent,
       changedLines,
     });
   }

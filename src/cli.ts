@@ -16,7 +16,7 @@ import { formatSarif } from './sarif.js';
 import { computeScore, formatScore } from './score.js';
 import { badgeFor } from './badge.js';
 import { BASELINE_FILENAME, loadBaseline, writeBaseline, partitionBaseline } from './baseline.js';
-import { getGitDiff, getGitRoot, resolveDiffPaths, parseDiff, shiftDiffMap, realpathOrSelf, parseDiffBlobs, findDiffContentMismatches} from './diff.js';
+import { getGitDiff, getGitRoot, resolveDiffPaths, parseDiff, shiftDiffMap, realpathOrSelf, parseDiffBlobs, findDiffContentMismatches, getIndexContents} from './diff.js';
 import { allRules, allMultilineRules } from './rules/index.js';
 import type { Severity } from './types.js';
 import type { DiffMap } from './diff.js';
@@ -243,6 +243,7 @@ const program = new Command()
     // Diff mode: changed lines from git, or from a unified diff piped to stdin
     let diffMap: DiffMap | undefined;
     let stagedSnapshot: StagedSnapshot | undefined;
+    let gitRootForBase: string | undefined;
     if (options.diffStdin) {
       if (process.stdin.isTTY) {
         console.error('Error: --diff-stdin expects a unified diff on stdin (e.g. git diff | vibecheck --diff-stdin .).');
@@ -318,6 +319,7 @@ const program = new Command()
     } else if (options.diff) {
       try {
         const repoRoot = getGitRoot(scanRoot);
+        gitRootForBase = repoRoot;
         const rawDiff = getGitDiff(repoRoot, false);
         diffMap = resolveDiffPaths(rawDiff, repoRoot, scanRoot);
       } catch (err) {
@@ -346,8 +348,18 @@ const program = new Command()
               content: f.content,
               changedLines: f.changedLines,
             })),
+            baseContents: new Map(stagedSnapshot.files.map((f) => [f.reportPath, f.baseContent])),
           })
-        : await scan(scanRoot, config, diffMap, { files: explicitFiles });
+        : await scan(scanRoot, config, diffMap, {
+            files: explicitFiles,
+            // Only for unstaged --diff: `git diff` compares against the index,
+            // so the index copy is the "before". A diff piped in on stdin has
+            // no reliable base to fetch, so that mode keeps anchor matching.
+            baseContents:
+              diffMap && options.diff
+                ? getIndexContents(gitRootForBase ?? scanRoot, scanRoot, [...diffMap.keys()])
+                : undefined,
+          });
     } catch (err) {
       console.error(`Error: scan failed for "${targetPath}".`, err instanceof Error ? err.message : '');
       process.exit(2);

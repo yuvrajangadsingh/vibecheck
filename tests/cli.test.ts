@@ -793,3 +793,82 @@ describe('--diff-stdin verifies the checkout matches the diff', () => {
     expect(res.status).toBe(0);
   });
 });
+
+// Diff mode kept only findings whose ANCHOR line changed. Multiline rules
+// report where a construct starts, so an edit could create a finding and have
+// it dropped. Scanning the pre-change file too lets us ask the question that
+// matters — did this change introduce it — instead of guessing from line
+// numbers.
+describe('diff mode reports findings the change introduced', () => {
+  const dirs: string[] = [];
+  function repo(files: Record<string, string>): string {
+    const dir = mkdtempSync(join(tmpdir(), 'vibecheck-cli-intro-'));
+    dirs.push(dir);
+    const git = (cmd: string) => execSync(`git ${cmd}`, { cwd: dir, stdio: 'ignore' });
+    git('init -q .');
+    git('config user.email t@t');
+    git('config user.name t');
+    for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, name), body);
+    git('add .');
+    git('commit -qm init');
+    return dir;
+  }
+  const bigFn = (n: number) =>
+    `export function grow() {\n${Array.from({ length: n }, (_, i) => `  const v${i} = ${i};`).join('\n')}\n  return 1;\n}\n`;
+
+  afterAll(() => {
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  it('reports a multiline finding created by an edit below its anchor', () => {
+    const dir = repo({
+      'f.ts': 'export function load() {\n  try {\n    return read();\n  } catch (err) {\n    return fallback();\n  }\n}\n',
+    });
+    // Only line 5 changes; the finding is anchored on line 4.
+    writeFileSync(
+      join(dir, 'f.ts'),
+      'export function load() {\n  try {\n    return read();\n  } catch (err) {\n    console.error(err);\n  }\n}\n'
+    );
+    const res = run(['--diff', '--format', 'compact', '--severity', 'warn', dir]);
+    expect(res.stdout).toContain('no-console-error-only');
+    expect(res.stdout).toContain('f.ts:4');
+  });
+
+  it('reports a function that crossed the length threshold, anchored on an untouched line', () => {
+    const dir = repo({ 'h.ts': bigFn(77) });
+    const lines = bigFn(77).split('\n');
+    lines.splice(78, 0, '  const a = 1;', '  const b = 2;', '  const c = 3;');
+    writeFileSync(join(dir, 'h.ts'), lines.join('\n'));
+
+    const res = run(['--diff', '--format', 'compact', '--severity', 'warn', dir]);
+    // The declaration on line 1 never changed; the finding is new all the same.
+    expect(res.stdout).toContain('no-god-function');
+    expect(res.stdout).toContain('h.ts:1');
+  });
+
+  // The reason this is not simply "match the whole span": a long function would
+  // otherwise warn on every PR that touched one line of it, forever, for code
+  // the author did not write.
+  it('stays quiet when an edit lands inside an already-too-long function', () => {
+    const dir = repo({ 'g.ts': bigFn(120) });
+    writeFileSync(join(dir, 'g.ts'), bigFn(120).replace('const v5 = 5;', 'const v5 = 500;'));
+
+    const res = run(['--diff', '--format', 'compact', '--severity', 'warn', dir]);
+    expect(res.stdout).not.toContain('no-god-function');
+    expect(res.status).toBe(0);
+  });
+
+  it('applies the same rule to --staged', () => {
+    const dir = repo({
+      'f.ts': 'export function load() {\n  try {\n    return read();\n  } catch (err) {\n    return fallback();\n  }\n}\n',
+    });
+    writeFileSync(
+      join(dir, 'f.ts'),
+      'export function load() {\n  try {\n    return read();\n  } catch (err) {\n    console.error(err);\n  }\n}\n'
+    );
+    execSync('git add f.ts', { cwd: dir, stdio: 'ignore' });
+
+    const res = run(['--staged', '--format', 'compact', '--severity', 'warn', dir]);
+    expect(res.stdout).toContain('no-console-error-only');
+  });
+});
