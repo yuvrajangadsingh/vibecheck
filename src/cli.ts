@@ -16,7 +16,8 @@ import { formatSarif } from './sarif.js';
 import { computeScore, formatScore } from './score.js';
 import { badgeFor } from './badge.js';
 import { BASELINE_FILENAME, loadBaseline, writeBaseline, partitionBaseline } from './baseline.js';
-import { getGitDiff, getGitRoot, resolveDiffPaths, parseDiff, shiftDiffMap, realpathOrSelf, parseDiffBlobs, findDiffContentMismatches, getIndexContents} from './diff.js';
+import { getGitRoot, resolveDiffPaths, resolveParsedDiff, parseDiff, shiftDiffMap, realpathOrSelf, parseDiffBlobs, findDiffContentMismatches, getIndexContents, getWorktreeDiff } from './diff.js';
+import type { Hunk } from './diff.js';
 import { allRules, allMultilineRules } from './rules/index.js';
 import type { Severity } from './types.js';
 import type { DiffMap } from './diff.js';
@@ -244,6 +245,8 @@ const program = new Command()
     let diffMap: DiffMap | undefined;
     let stagedSnapshot: StagedSnapshot | undefined;
     let gitRootForBase: string | undefined;
+    let diffHunks: Map<string, Hunk[]> | undefined;
+    let diffBaseTree: string | null = null;
     if (options.diffStdin) {
       if (process.stdin.isTTY) {
         console.error('Error: --diff-stdin expects a unified diff on stdin (e.g. git diff | vibecheck --diff-stdin .).');
@@ -320,8 +323,16 @@ const program = new Command()
       try {
         const repoRoot = getGitRoot(scanRoot);
         gitRootForBase = repoRoot;
-        const rawDiff = getGitDiff(repoRoot, false);
-        diffMap = resolveDiffPaths(rawDiff, repoRoot, scanRoot);
+        // The index is frozen once (write-tree) and both the diff and the base
+        // blobs come from that tree, so the line map and the base can never
+        // describe two different states. Without a tree (unmerged index) the
+        // hunks cannot be trusted against separately-read base content, so
+        // correspondence stays off and selection falls back to counts.
+        const { parsed, baseTree } = getWorktreeDiff(repoRoot);
+        diffBaseTree = baseTree;
+        const resolved = resolveParsedDiff(parsed, repoRoot, scanRoot);
+        diffMap = resolved.changedLines;
+        diffHunks = baseTree ? resolved.hunks : undefined;
       } catch (err) {
         console.error(`Error: ${err instanceof Error ? err.message : 'git diff failed'}`);
         process.exit(2);
@@ -350,10 +361,11 @@ const program = new Command()
               path: f.reportPath,
               content: f.content,
               changedLines: f.changedLines,
+              hunks: f.hunks,
             })),
             baseContents: new Map(stagedSnapshot.files.map((f) => [f.reportPath, f.baseContent])),
           })
-        : scan(scanRoot, config, diffMap, { files: explicitFiles, baseContents: baseForScan });
+        : scan(scanRoot, config, diffMap, { files: explicitFiles, baseContents: baseForScan, hunks: diffHunks });
 
     let result;
     try {
@@ -362,7 +374,7 @@ const program = new Command()
       // reliable base to fetch, so that mode keeps anchor matching.
       baseForScan =
         diffMap && options.diff
-          ? getIndexContents(gitRootForBase ?? scanRoot, scanRoot, [...diffMap.keys()])
+          ? getIndexContents(gitRootForBase ?? scanRoot, scanRoot, [...diffMap.keys()], diffBaseTree)
           : undefined;
       result = await runScan();
     } catch (err) {
@@ -377,10 +389,21 @@ const program = new Command()
       if (fixResult.linesRemoved > 0) {
         fixNote = `  ✔ fixed ${fixResult.linesRemoved} finding${fixResult.linesRemoved === 1 ? '' : 's'} in ${fixResult.filesModified} file${fixResult.filesModified === 1 ? '' : 's'} (removed AI attribution comments)\n`;
         try {
-          // The fixer deleted lines, so the map built before the fix now points
-          // at the wrong ones. Shift it by what was actually removed rather
-          // than reusing it, which silently dropped shifted findings.
-          if (diffMap) diffMap = shiftDiffMap(diffMap, fixResult.fixedFindings);
+          // The fixer rewrote files, so the map built before the fix points at
+          // the wrong lines. For --diff the whole diff is REGENERATED against
+          // the same frozen tree — shifting line sets cannot shift hunks, and
+          // stale hunks would resurrect the reformat false-blame the moment an
+          // unrelated fix landed above one. --diff-stdin has no tree to rediff
+          // against, so its line sets are shifted as before (it never carries
+          // hunks).
+          if (options.diff && gitRootForBase) {
+            const re = getWorktreeDiff(gitRootForBase, diffBaseTree);
+            const resolved = resolveParsedDiff(re.parsed, gitRootForBase, scanRoot);
+            diffMap = resolved.changedLines;
+            diffHunks = re.baseTree ? resolved.hunks : undefined;
+          } else if (diffMap) {
+            diffMap = shiftDiffMap(diffMap, fixResult.fixedFindings);
+          }
           result = await runScan();
         } catch {
           // keep pre-rescan result if the second pass fails
@@ -407,7 +430,7 @@ const program = new Command()
 
     const baseline = loadBaseline(baselinePath);
     if (baseline) {
-      const partitioned = partitionBaseline(result.findings, baseline);
+      const partitioned = partitionBaseline(result.findings, baseline, result.baselineCredits);
       baselinedCount = partitioned.baselinedCount;
       const summary: Record<Severity, number> = { error: 0, warn: 0, info: 0 };
       for (const f of partitioned.newFindings) summary[f.severity]++;

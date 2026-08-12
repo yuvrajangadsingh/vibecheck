@@ -85,8 +85,32 @@ function stripPrefix(path: string): string {
  * Parse unified diff output into a map of file -> changed line numbers.
  * Only tracks added/modified lines (lines starting with +).
  */
+/**
+ * One hunk of a unified diff, half-open on both sides.
+ *
+ * `oldCount === 0` means an insertion AFTER oldStart (git prints the line
+ * before the insertion point), and `newCount === 0` a deletion after newStart.
+ */
+export type Hunk = {
+  oldStart: number;
+  oldCount: number;
+  newStart: number;
+  newCount: number;
+};
+
+export type ParsedDiff = {
+  changedLines: DiffMap;
+  /** Per file, in patch order. Coordinates only; line text lives in the file contents. */
+  hunks: Map<string, Hunk[]>;
+};
+
 export function parseDiff(diffOutput: string): DiffMap {
+  return parseDiffDetailed(diffOutput).changedLines;
+}
+
+export function parseDiffDetailed(diffOutput: string): ParsedDiff {
   const result: DiffMap = new Map();
+  const hunks = new Map<string, Hunk[]>();
   let currentFile: string | null = null;
   let lineNumber = 0;
   // Headers (---, +++, index) only appear BETWEEN hunks. Checking for them
@@ -96,6 +120,10 @@ export function parseDiff(diffOutput: string): DiffMap {
   // clobbered currentFile with garbage. Each new file's `diff` line ends the
   // hunk; a headerless concatenation of raw hunks is not supported.
   let inHunk = false;
+
+  const touch = (file: string) => {
+    if (!result.has(file)) result.set(file, new Set());
+  };
 
   for (const rawLine of diffOutput.split('\n')) {
     // CRLF diffs would otherwise leave a trailing \r on header paths, making
@@ -124,11 +152,20 @@ export function parseDiff(diffOutput: string): DiffMap {
       continue;
     }
 
-    // Hunk header: @@ -10,5 +12,8 @@
-    const hunkMatch = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    // Hunk header: @@ -10,5 +12,8 @@ (counts default to 1 when omitted)
+    const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
     if (hunkMatch) {
-      lineNumber = parseInt(hunkMatch[1], 10);
+      const oldStart = parseInt(hunkMatch[1], 10);
+      const oldCount = hunkMatch[2] === undefined ? 1 : parseInt(hunkMatch[2], 10);
+      const newStart = parseInt(hunkMatch[3], 10);
+      const newCount = hunkMatch[4] === undefined ? 1 : parseInt(hunkMatch[4], 10);
+      lineNumber = newStart;
       inHunk = true;
+      if (currentFile) {
+        const list = hunks.get(currentFile) ?? [];
+        list.push({ oldStart, oldCount, newStart, newCount });
+        hunks.set(currentFile, list);
+      }
       continue;
     }
 
@@ -136,9 +173,7 @@ export function parseDiff(diffOutput: string): DiffMap {
 
     if (line.startsWith('+')) {
       // Added/modified line
-      if (!result.has(currentFile)) {
-        result.set(currentFile, new Set());
-      }
+      touch(currentFile);
       result.get(currentFile)!.add(lineNumber);
       lineNumber++;
     } else if (line.startsWith('-')) {
@@ -149,16 +184,14 @@ export function parseDiff(diffOutput: string): DiffMap {
       // file is scanned, and introduced-finding detection judges it against
       // the base; without a base, anchor matching keeps nothing, exactly as
       // before. A pure rename emits no hunks and still produces no entry.
-      if (!result.has(currentFile)) {
-        result.set(currentFile, new Set());
-      }
+      touch(currentFile);
     } else {
       // Context line
       lineNumber++;
     }
   }
 
-  return result;
+  return { changedLines: result, hunks };
 }
 
 /**
@@ -246,6 +279,57 @@ export function realpathOrSelf(p: string): string {
   } catch {
     return p;
   }
+}
+
+/**
+ * Map an old-side line to its new-side position.
+ *
+ * Exact for lines OUTSIDE every hunk: shift by the cumulative delta of the
+ * hunks above. Lines inside a hunk's old range return the hunk index instead —
+ * there is no per-line truth inside a replacement, and pretending otherwise is
+ * how the wrong copy of a duplicate finding gets blamed.
+ */
+export function mapOldLine(hunks: Hunk[], oldLine: number): { line: number } | { hunk: number } {
+  let delta = 0;
+  for (let i = 0; i < hunks.length; i++) {
+    const h = hunks[i];
+    if (h.oldCount > 0 && oldLine >= h.oldStart && oldLine < h.oldStart + h.oldCount) {
+      return { hunk: i };
+    }
+    // A zero-count hunk is an insertion AFTER oldStart, so oldStart itself is
+    // not shifted by it; every later line is.
+    const hunkIsAbove = h.oldCount === 0 ? h.oldStart < oldLine : h.oldStart + h.oldCount <= oldLine;
+    if (hunkIsAbove) delta += h.newCount - h.oldCount;
+  }
+  return { line: oldLine + delta };
+}
+
+/** Index of the hunk whose NEW range contains this line, or -1. */
+export function hunkIndexForNewLine(hunks: Hunk[], newLine: number): number {
+  for (let i = 0; i < hunks.length; i++) {
+    const h = hunks[i];
+    if (h.newCount > 0 && newLine >= h.newStart && newLine < h.newStart + h.newCount) return i;
+  }
+  return -1;
+}
+
+/**
+ * Resolve a ParsedDiff's repo-relative paths against the scan root, keeping
+ * changed lines and hunks on the same keys. Resolving one and not the other is
+ * a correspondence that silently stops corresponding.
+ */
+export function resolveParsedDiff(parsed: ParsedDiff, repoRoot: string, scanRoot: string): ParsedDiff {
+  const changedLines = resolveDiffPaths(parsed.changedLines, repoRoot, scanRoot);
+  const hunks = new Map<string, Hunk[]>();
+  const realRepoRoot = realpathOrSelf(repoRoot);
+  const realScanRoot = realpathOrSelf(scanRoot);
+  for (const [filePath, list] of parsed.hunks) {
+    const absPath = resolve(realRepoRoot, filePath);
+    const relPath = relative(realScanRoot, absPath);
+    if (relPath === '..' || relPath.startsWith('..' + sep)) continue;
+    hunks.set(relPath, list);
+  }
+  return { changedLines, hunks };
 }
 
 /**
@@ -432,7 +516,19 @@ export function findDiffContentMismatches(
  * here", which line numbers alone cannot express for a multiline rule whose
  * anchor sits above the line you touched.
  */
-export function getIndexContents(repoRoot: string, scanRoot: string, paths: string[]): Map<string, string> {
+export function getIndexContents(
+  repoRoot: string,
+  scanRoot: string,
+  paths: string[],
+  /**
+   * Read blobs from this tree instead of the live index, so the base matches
+   * a diff generated against the same tree. Paths MISSING from the tree are
+   * re-read from the index: an intent-to-add file exists there as an empty
+   * blob, and that empty blob is the signal that keeps an unstaged rename
+   * from being blamed for everything it contains.
+   */
+  baseTree?: string | null
+): Map<string, string> {
   const out = new Map<string, string>();
   if (paths.length === 0) return out;
 
@@ -458,7 +554,7 @@ export function getIndexContents(repoRoot: string, scanRoot: string, paths: stri
         // NUL-delimited: a filename may legally contain a newline, and
         // newline-delimited requests let such a name corrupt the framing of
         // every response after it.
-        input: [...repoPathFor.values()].map((p) => `:${p}`).join('\0') + '\0',
+        input: [...repoPathFor.values()].map((p) => `${baseTree ? baseTree + ':' : ':'}${p}`).join('\0') + '\0',
         encoding: 'latin1',
         maxBuffer: 256 * 1024 * 1024,
         stdio: ['pipe', 'pipe', 'ignore'],
@@ -471,6 +567,7 @@ export function getIndexContents(repoRoot: string, scanRoot: string, paths: stri
   // Responses come back in request order: a header line, then the payload, or
   // "<spec> missing" for anything the index does not have.
   const reportPaths = [...repoPathFor.keys()];
+  const treeMisses: string[] = [];
   let cursor = 0;
   for (const reportPath of reportPaths) {
     const nl = batch.indexOf('\n', cursor);
@@ -479,9 +576,15 @@ export function getIndexContents(repoRoot: string, scanRoot: string, paths: stri
     cursor = nl + 1;
 
     if (/\bmissing$/.test(header)) {
-      // Absent from the index means the file is new, so everything in it is
-      // introduced.
-      out.set(reportPath, '');
+      if (baseTree) {
+        // Missing from the frozen tree is not the same as new: intent-to-add
+        // entries never enter a written tree. Re-check the live index below.
+        treeMisses.push(reportPath);
+      } else {
+        // Absent from the index means the file is new, so everything in it is
+        // introduced.
+        out.set(reportPath, '');
+      }
       continue;
     }
     if (/ (ambiguous|dangling)$/.test(header)) {
@@ -506,5 +609,75 @@ export function getIndexContents(repoRoot: string, scanRoot: string, paths: stri
     out.set(reportPath, Buffer.from(body, 'latin1').toString('utf-8'));
   }
 
+  if (treeMisses.length > 0) {
+    const fromIndex = getIndexContents(repoRoot, scanRoot, treeMisses);
+    for (const [k, v] of fromIndex) out.set(k, v);
+  }
+
   return out;
+}
+
+/**
+ * Diff the worktree against a FROZEN copy of the index.
+ *
+ * Plain `git diff` and a later index read can observe two different index
+ * states — stage something in between and the line map describes one base
+ * while the contents come from another, which correspondence turns from a
+ * subtle miscount into concrete wrong lines. `git write-tree` pins the index
+ * once; the diff and every base blob read come from that immutable tree, the
+ * same guarantee staged mode gets.
+ *
+ * Falls back to a live `git diff` (no tree; callers should not trust hunks
+ * for correspondence then) when the index cannot be written, e.g. unmerged
+ * paths mid-conflict.
+ */
+export function getWorktreeDiff(
+  repoRoot: string,
+  reuseTree?: string | null
+): { parsed: ParsedDiff; baseTree: string | null } {
+  let tree: string | null = reuseTree ?? null;
+  if (!tree) {
+    try {
+      tree = execFileSync('git', ['write-tree'], {
+        cwd: repoRoot,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+    } catch {
+      tree = null;
+    }
+  }
+
+  const stable = [
+    '-c', 'core.quotePath=false',
+    '-c', 'diff.noprefix=false',
+    // Nearby zero-context hunks can be merged by user config, which folds
+    // unchanged lines INTO a hunk and breaks positional matching against it.
+    '-c', 'diff.interHunkContext=0',
+    '-c', 'color.diff=never',
+  ];
+  const args = [
+    ...stable,
+    'diff',
+    '-U0',
+    '--text',
+    '--no-textconv',
+    '--no-ext-diff',
+    ...(tree ? [tree] : []),
+  ];
+
+  try {
+    const output = execFileSync('git', args, {
+      cwd: repoRoot,
+      encoding: 'utf-8',
+      maxBuffer: 256 * 1024 * 1024,
+    });
+    return { parsed: parseDiffDetailed(output), baseTree: tree };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('not a git repository')) {
+      throw new Error('--diff requires a git repository');
+    }
+    throw new Error(`git diff failed: ${msg.slice(0, 200)}`);
+  }
 }

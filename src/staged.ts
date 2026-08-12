@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { relative } from 'node:path';
 import picomatch from 'picomatch';
-import { parseDiff, realpathOrSelf, type DiffMap } from './diff.js';
+import { parseDiffDetailed, realpathOrSelf, type DiffMap, type Hunk } from './diff.js';
 
 /**
  * Read the STAGED content of changed files, not the working tree.
@@ -51,6 +51,8 @@ export type StagedFile = {
   /** The same file at HEAD, so we can tell an introduced finding from an old one. */
   baseContent: string;
   changedLines: Set<number>;
+  /** Hunks between base and index for this file, for positional matching. */
+  hunks: Hunk[];
 };
 
 export type StagedProblem = {
@@ -80,6 +82,10 @@ function git(cwd: string, args: string[]): string {
 const STABLE_DIFF = [
   '-c',
   'core.quotePath=false',
+  // Nearby zero-context hunks can be merged by user config, which folds
+  // unchanged lines INTO a hunk and breaks positional matching against it.
+  '-c',
+  'diff.interHunkContext=0',
   '-c',
   'diff.noprefix=false',
   '-c',
@@ -150,7 +156,8 @@ export function readStagedSnapshot(
 
   // 3. Line map and file metadata come from the SAME pair of immutable trees.
   const patch = git(repoRoot, [...STABLE_DIFF, 'diff-tree', '-U0', '-r', '-M', ...FORCE_TEXT, baseTree, indexTree]);
-  const lineMap = parseDiff(patch);
+  const parsed = parseDiffDetailed(patch);
+  const lineMap = parsed.changedLines;
 
   const raw = git(repoRoot, [...STABLE_DIFF, 'diff-tree', '-r', '-M', '--raw', '-z', baseTree, indexTree]);
 
@@ -241,6 +248,7 @@ export function readStagedSnapshot(
       content: raw_content.toString('utf-8'),
       baseContent,
       changedLines,
+      hunks: parsed.hunks.get(entry.path) ?? [],
     });
   }
 

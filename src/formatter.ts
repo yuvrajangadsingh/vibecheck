@@ -172,7 +172,9 @@ export function formatJSON(result: ScanResult, minSeverity: Severity, opts: Form
   for (const f of filtered) summary[f.severity]++;
   // Suppressed findings are reported via suppressedCount (and the full list
   // only with --show-suppressed), keeping default output byte-compatible.
-  const { suppressed, ...rest } = result;
+  // baselineCredits is internal plumbing for baseline accounting, not output.
+  const { suppressed, baselineCredits, ...rest } = result;
+  void baselineCredits;
   const payload: Record<string, unknown> = { ...rest, findings: filtered, summary };
   if (opts.baselinedCount !== undefined) payload.baselinedCount = opts.baselinedCount;
   if (suppressed && suppressed.length > 0) payload.suppressedCount = suppressed.length;

@@ -5,7 +5,8 @@ import { allRules, allMultilineRules } from './rules/index.js';
 import { maskLines } from './lexer.js';
 import { parseSuppressions, isSuppressed } from './suppressions.js';
 import type { Config, Finding, ScanResult, Severity, SkippedFile} from './types.js';
-import type { DiffMap } from './diff.js';
+import { mapOldLine, hunkIndexForNewLine } from './diff.js';
+import type { DiffMap, Hunk } from './diff.js';
 import { findingFingerprint } from './fingerprint.js';
 
 const MAX_FILE_SIZE = 1_000_000; // 1MB
@@ -221,7 +222,13 @@ export type ScanOptions = {
    * --staged, where the bytes that matter live in the index and the working
    * tree may hold something entirely different.
    */
-  contents?: { path: string; content: string; changedLines?: Set<number> }[];
+  contents?: {
+    path: string;
+    content: string;
+    changedLines?: Set<number>;
+    /** Hunks for this file, enabling positional matching against the base. */
+    hunks?: Hunk[];
+  }[];
   /**
    * The content of each changed file BEFORE the change, keyed by the same path
    * used for reporting.
@@ -238,6 +245,12 @@ export type ScanOptions = {
    * reported stops being reported.
    */
   baseContents?: Map<string, string>;
+  /**
+   * Hunks per report path for filesystem scans. With these, selection can ask
+   * WHERE a base finding went instead of only how many existed, which is what
+   * tells two identical findings apart.
+   */
+  hunks?: Map<string, Hunk[]>;
 };
 
 /**
@@ -270,22 +283,140 @@ function baseFindingsFor(
   return { findings: r.findings, suppressed: r.suppressed };
 }
 
+export type DiffSelection = {
+  kept: Finding[];
+  /**
+   * Per fingerprint: occurrences that existed in the base and were therefore
+   * NOT reported. The baseline must spend its budget on these before it may
+   * absorb a reported finding, or the old copy's baseline slot hides the
+   * introduced duplicate — the false clean a review found in v1.20.0.
+   */
+  baselineCredits: Map<string, number>;
+};
+
 function selectForDiff(
   found: Finding[],
   changedLines: Set<number> | undefined,
-  baseFindings: Finding[] | null
-): Finding[] {
-  if (!changedLines) return found;
-  if (!baseFindings) return found.filter((f) => changedLines.has(f.line));
+  baseFindings: Finding[] | null,
+  hunks?: Hunk[]
+): DiffSelection {
+  const credits = new Map<string, number>();
+  const credit = (key: string) => credits.set(key, (credits.get(key) ?? 0) + 1);
 
+  if (!changedLines) return { kept: found, baselineCredits: credits };
+  if (!baseFindings) {
+    return { kept: found.filter((f) => changedLines.has(f.line)), baselineCredits: credits };
+  }
+  if (!hunks) return selectByCountBudget(found, changedLines, baseFindings, credits);
+
+  // With hunks we can ask WHERE each base finding went, instead of only how
+  // many of each fingerprint existed. Exact mapping outside hunks is ground
+  // truth; inside a hunk only an unambiguous pairing counts; everything else
+  // stays unknown and keeps the miss-over-blame fallback. A hunk is NOT an
+  // equivalence class — treating it as one recreates the wrong-copy problem at
+  // hunk granularity the moment a large replacement holds two identical
+  // findings.
+  const baseByFp = new Map<string, { line: number; mapped: { line: number } | { hunk: number } }[]>();
+  for (const b of baseFindings) {
+    const key = findingFingerprint(b);
+    const list = baseByFp.get(key) ?? [];
+    list.push({ line: b.line, mapped: mapOldLine(hunks, b.line) });
+    baseByFp.set(key, list);
+  }
+  const newByFp = new Map<string, Finding[]>();
+  for (const f of found) {
+    const key = findingFingerprint(f);
+    const list = newByFp.get(key) ?? [];
+    list.push(f);
+    newByFp.set(key, list);
+  }
+
+  const kept = new Set<Finding>();
+  for (const [key, news] of newByFp) {
+    const bases = baseByFp.get(key) ?? [];
+    const matchedNew = new Set<Finding>();
+    const matchedBase = new Set<(typeof bases)[number]>();
+
+    // (a) Exact: a base finding outside every hunk maps to one specific line.
+    for (const b of bases) {
+      if (!('line' in b.mapped)) continue;
+      const target = b.mapped.line;
+      const hit = news.find((n) => !matchedNew.has(n) && n.line === target);
+      if (hit) {
+        matchedNew.add(hit);
+        matchedBase.add(b);
+      }
+    }
+
+    // (b) Inside each hunk: match 1:1, or a pure block shift where every
+    // occurrence keeps its offset from the hunk start (a reindented block).
+    // Anything else is unknown.
+    const unknownNew = new Set<Finding>();
+    const hunkIndexes = new Set<number>();
+    for (const b of bases) if (!matchedBase.has(b) && 'hunk' in b.mapped) hunkIndexes.add(b.mapped.hunk);
+    for (const n of news) {
+      if (matchedNew.has(n)) continue;
+      const h = hunkIndexForNewLine(hunks, n.line);
+      if (h >= 0) hunkIndexes.add(h);
+    }
+    for (const h of hunkIndexes) {
+      const bIn = bases.filter((b) => !matchedBase.has(b) && 'hunk' in b.mapped && b.mapped.hunk === h);
+      const nIn = news.filter((n) => !matchedNew.has(n) && hunkIndexForNewLine(hunks, n.line) === h);
+      if (bIn.length === 0 || nIn.length === 0) continue; // fresh or removed; nothing to pair
+      const blockShift =
+        bIn.length === nIn.length &&
+        [...bIn]
+          .sort((a, b) => a.line - b.line)
+          .every(
+            (b, i) =>
+              [...nIn].sort((x, y) => x.line - y.line)[i].line - hunks[h].newStart ===
+              b.line - hunks[h].oldStart
+          );
+      if ((bIn.length === 1 && nIn.length === 1) || blockShift) {
+        for (const n of nIn) matchedNew.add(n);
+        for (const b of bIn) matchedBase.add(b);
+      } else {
+        for (const n of nIn) unknownNew.add(n);
+      }
+    }
+
+    for (const n of news) {
+      if (matchedNew.has(n)) {
+        // Proven pre-existing: quiet even when its anchor line changed, which
+        // is exactly the reformat case — an indent-only edit must not read as
+        // the author introducing the finding.
+        credit(key);
+      } else if (unknownNew.has(n)) {
+        // Identical occurrences coexist in an ambiguous changed region. Keep
+        // the old contract for these: report on a changed anchor, never guess.
+        if (changedLines.has(n.line)) kept.add(n);
+        else credit(key);
+      } else {
+        kept.add(n); // introduced: no corresponding base occurrence anywhere
+      }
+    }
+  }
+
+  return { kept: found.filter((f) => kept.has(f)), baselineCredits: credits };
+}
+
+/**
+ * The pre-correspondence algorithm, kept for callers that supply base content
+ * without hunks. Counts cannot say WHICH copy is new, so ambiguous groups fall
+ * back to anchor matching.
+ */
+function selectByCountBudget(
+  found: Finding[],
+  changedLines: Set<number>,
+  baseFindings: Finding[],
+  credits: Map<string, number>
+): DiffSelection {
   const baseCount = new Map<string, number>();
   for (const f of baseFindings) {
     const key = findingFingerprint(f);
     baseCount.set(key, (baseCount.get(key) ?? 0) + 1);
   }
 
-  // Group by identity, because deciding which occurrence is the new one is
-  // only meaningful within a group of identical findings.
   const groups = new Map<string, Finding[]>();
   for (const f of found) {
     const key = findingFingerprint(f);
@@ -303,25 +434,15 @@ function selectForDiff(
     if (introduced <= 0) continue;
 
     const candidates = list.filter((f) => !changedLines.has(f.line));
-
-    // With no equivalent in the base, every one of these is new and there is
-    // nothing to guess about.
     if (already === 0) {
       for (const f of candidates) kept.add(f);
       continue;
     }
-
-    // Otherwise the file already had findings of this kind and gained more, and
-    // identical findings carry nothing that tells the copies apart. Guessing by
-    // proximity blamed the wrong one whenever a multiline finding's changed
-    // body sat far below its anchor. Fall back to anchor matching for the
-    // group, which is what the previous release did: it can still miss the new
-    // one, but it never points at code the author did not touch.
     if (candidates.length > 1) continue;
     for (const f of candidates) kept.add(f);
   }
 
-  return found.filter((f) => kept.has(f));
+  return { kept: found.filter((f) => kept.has(f)), baselineCredits: credits };
 }
 
 export async function scan(
@@ -336,6 +457,7 @@ export async function scan(
 
 
   const skipped: SkippedFile[] = [];
+  const baselineCredits = new Map<string, number>();
   let scannedCount = 0;
   let linesScanned = 0;
 
@@ -360,6 +482,7 @@ export async function scan(
       duration: performance.now() - start,
       summary,
       skipped,
+      baselineCredits: baselineCredits.size ? Object.fromEntries(baselineCredits) : undefined,
     };
   };
   // Non-empty lines only: blank-line padding must not dilute a density score,
@@ -375,9 +498,13 @@ export async function scan(
       }
       const fileResult = scanContentDetailed(item.content, item.path, config);
       const base = baseFindingsFor(item.path, config, options.baseContents);
-      findings.push(...selectForDiff(fileResult.findings, item.changedLines, base?.findings ?? null));
+      // Active and suppressed pools are matched independently: a suppressed
+      // base occurrence must never consume a newly unsuppressed finding.
+      const active = selectForDiff(fileResult.findings, item.changedLines, base?.findings ?? null, item.hunks);
+      findings.push(...active.kept);
+      for (const [k, v] of active.baselineCredits) baselineCredits.set(k, (baselineCredits.get(k) ?? 0) + v);
       suppressed.push(
-        ...selectForDiff(fileResult.suppressed, item.changedLines, base?.suppressed ?? null)
+        ...selectForDiff(fileResult.suppressed, item.changedLines, base?.suppressed ?? null, item.hunks).kept
       );
     }
     return finish();
@@ -440,9 +567,12 @@ export async function scan(
 
     const fileResult = scanContentDetailed(content, relPath, config);
     const base = baseFindingsFor(relPath, config, options.baseContents);
-    findings.push(...selectForDiff(fileResult.findings, changedLines, base?.findings ?? null));
+    const fileHunks = options.hunks?.get(relPath);
+    const active = selectForDiff(fileResult.findings, changedLines, base?.findings ?? null, fileHunks);
+    findings.push(...active.kept);
+    for (const [k, v] of active.baselineCredits) baselineCredits.set(k, (baselineCredits.get(k) ?? 0) + v);
     suppressed.push(
-      ...selectForDiff(fileResult.suppressed, changedLines, base?.suppressed ?? null)
+      ...selectForDiff(fileResult.suppressed, changedLines, base?.suppressed ?? null, fileHunks).kept
     );
   }
 

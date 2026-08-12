@@ -984,6 +984,115 @@ describe('diff mode reports findings the change introduced', () => {
     expect(res.stdout).not.toContain('no-console-error-only');
   });
 
+  // With hunks, selection can ask WHERE each base finding went instead of only
+  // how many existed. Identical duplicates stop being ambiguous: the old copy
+  // maps to its shifted position, so the fresh copy is the one reported.
+  it('reports the introduced identical duplicate, not the old copy', () => {
+    // The two lines must be BYTE-IDENTICAL or the fingerprints differ (it is
+    // rule + path + trimmed snippet) and this is not a duplicate at all.
+    const DUP = 'const v = eval(x);';
+    const pad = Array.from({ length: 30 }, (_, i) => `const p${i} = ${i};`).join('\n');
+    const dir = repo({ 'f.ts': pad + `\n${DUP}\n` });
+    writeFileSync(join(dir, 'f.ts'), `${DUP}\n` + pad + `\n${DUP}\n`);
+
+    const res = run(['--diff', '--format', 'compact', '--severity', 'warn', '--fail-on', 'never', dir]);
+    // The old copy maps to its shifted position (31 -> 32) and stays quiet;
+    // only the fresh copy at line 1 is reported. The count-budget algorithm
+    // reported BOTH, blaming code the author never touched.
+    expect(res.stdout).toContain('f.ts:1:');
+    expect(res.stdout).not.toContain('f.ts:32:');
+
+    execSync('git add f.ts', { cwd: dir, stdio: 'ignore' });
+    const staged = run(['--staged', '--format', 'compact', '--severity', 'warn', '--fail-on', 'never', dir]);
+    expect(staged.stdout).toContain('f.ts:1:');
+    expect(staged.stdout).not.toContain('f.ts:32:');
+  });
+
+  it('reports the introduced duplicate when it lands BELOW the old copy', () => {
+    const DUP = 'const v = eval(x);';
+    const pad = Array.from({ length: 10 }, (_, i) => `const q${i} = ${i};`).join('\n');
+    const dir = repo({ 'f.ts': `${DUP}\n` + pad + '\n' });
+    writeFileSync(join(dir, 'f.ts'), `${DUP}\n` + pad + `\n${DUP}\n`);
+
+    const res = run(['--diff', '--format', 'compact', '--severity', 'warn', '--fail-on', 'never', dir]);
+    // The untouched copy at line 1 maps to itself exactly; the new one is last.
+    expect(res.stdout).toContain('f.ts:12:');
+    expect(res.stdout).not.toContain('f.ts:1:');
+  });
+
+  // An indentation-only edit keeps the trimmed snippet, so the finding provably
+  // pre-existed. Reporting it blamed authors for running a formatter.
+  it('stays quiet when a finding anchor is only reindented', () => {
+    const dir = repo({
+      'g.ts': 'export function a() {\n  try {\n    return r();\n  } catch (e) {\n    console.error(e);\n  }\n}\n',
+    });
+    writeFileSync(
+      join(dir, 'g.ts'),
+      'const added = 0;\nexport function a() {\n  try {\n    return r();\n    } catch (e) {\n    console.error(e);\n  }\n}\n'
+    );
+
+    const res = run(['--diff', '--format', 'compact', '--severity', 'warn', '--fail-on', 'never', dir]);
+    expect(res.stdout).not.toContain('no-console-error-only');
+
+    execSync('git add g.ts', { cwd: dir, stdio: 'ignore' });
+    const staged = run(['--staged', '--format', 'compact', '--severity', 'warn', '--fail-on', 'never', dir]);
+    expect(staged.stdout).not.toContain('no-console-error-only');
+  });
+
+  it('a whole reindented block of distinct findings stays quiet', () => {
+    const mk = (indent: string) =>
+      `export function a() {\n${indent}try {\n${indent}  return r();\n${indent}} catch (e) {\n${indent}  console.error(e);\n${indent}}\n}\nconst tail = eval(z);\n`;
+    const dir = repo({ 'h.ts': mk('  ') });
+    writeFileSync(join(dir, 'h.ts'), mk('    '));
+
+    const res = run(['--diff', '--format', 'compact', '--severity', 'warn', '--fail-on', 'never', dir]);
+    expect(res.stdout.trim()).toBe('');
+  });
+
+  // A baseline holding the OLD copy's fingerprint used to absorb the newly
+  // introduced duplicate: selection dropped the old copy, the baseline spent
+  // its slot on the new one, and the run came back green.
+  it('the baseline cannot absorb an introduced duplicate with the old copy\u2019s slot', () => {
+    const DUP = 'const v = eval(x);';
+    const pad = Array.from({ length: 20 }, (_, i) => `const r${i} = ${i};`).join('\n');
+    const dir = repo({ 'f.ts': pad + `\n${DUP}\n` });
+    // cwd must be the fixture throughout: the baseline path resolves against
+    // cwd, not the scan target, so scanning from elsewhere silently loads no
+    // baseline and the test passes with or without the code under test.
+    const at = { cwd: dir };
+    run(['--update-baseline', '.'], at);
+    writeFileSync(join(dir, 'f.ts'), `${DUP}\n` + pad + `\n${DUP}\n`);
+
+    const res = run(['--diff', '--format', 'compact', '--severity', 'warn', '--fail-on', 'never', '.'], at);
+    expect(res.stdout).toContain('no-eval');
+    expect(res.stdout).toContain('f.ts:1');
+    // baselinedCount is 0, and that is the mechanism working: selection already
+    // dropped the old copy, so it never reaches the baseline. The credit spends
+    // the slot instead, leaving nothing for the introduced copy to be absorbed
+    // by. Without credits the slot would still be open and this run would be
+    // green with an empty findings list.
+    const json = run(['--diff', '--format', 'json', '--severity', 'warn', '--fail-on', 'never', '.'], at);
+    const parsed = JSON.parse(json.stdout);
+    expect(parsed.baselinedCount ?? 0).toBe(0);
+    expect(parsed.findings.map((f: { rule: string }) => f.rule)).toContain('no-eval');
+  });
+
+  // The --fix rescan regenerates the diff against the same frozen tree. With
+  // shifted line sets and stale hunks, the fix landing ABOVE a reindented
+  // finding would resurrect the reformat false blame.
+  it('a fix above a reindented finding does not resurrect it', () => {
+    const dir = repo({
+      'k.ts': '// keep\nexport function a() {\n  try {\n    return r();\n  } catch (e) {\n    console.error(e);\n  }\n}\n',
+    });
+    writeFileSync(
+      join(dir, 'k.ts'),
+      '// Generated by ChatGPT\n// keep\nexport function a() {\n  try {\n    return r();\n    } catch (e) {\n    console.error(e);\n  }\n}\n'
+    );
+
+    const res = run(['--diff', '--fix', '--format', 'compact', '--severity', 'warn', '--fail-on', 'never', dir]);
+    expect(res.stdout).not.toContain('no-console-error-only');
+  });
+
   it('applies the same rule to --staged', () => {
     const dir = repo({
       'f.ts': 'export function load() {\n  try {\n    return read();\n  } catch (err) {\n    return fallback();\n  }\n}\n',

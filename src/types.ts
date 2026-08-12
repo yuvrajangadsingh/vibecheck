@@ -84,4 +84,11 @@ export type ScanResult = {
    * scanner used to collapse into the same silent pass.
    */
   skipped?: SkippedFile[];
+  /**
+   * Diff mode only: per fingerprint, occurrences proven pre-existing and
+   * therefore not reported. The baseline spends its budget on these FIRST, or
+   * the old copy's slot absorbs the introduced duplicate. Internal; stripped
+   * from serialized output.
+   */
+  baselineCredits?: Record<string, number>;
 };

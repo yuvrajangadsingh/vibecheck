@@ -60,8 +60,23 @@ export function writeBaseline(path: string, findings: Finding[]): number {
 export function partitionBaseline(
   findings: Finding[],
   baseline: Baseline,
+  /**
+   * Diff mode: per fingerprint, occurrences selection proved pre-existing and
+   * already dropped. The budget is spent on those FIRST. Without this, a
+   * baseline holding the OLD copy's fingerprint absorbed the newly introduced
+   * duplicate — the reviewer's false clean from v1.20.0: baseline F:1, old F
+   * suppressed by selection, new F at line 4 consumed by the baseline, run
+   * green on a change that added a finding.
+   */
+  credits?: Record<string, number>,
 ): { newFindings: Finding[]; baselinedCount: number } {
   const remaining = new Map(baseline);
+  if (credits) {
+    for (const [fingerprint, spent] of Object.entries(credits)) {
+      const left = remaining.get(fingerprint) ?? 0;
+      if (left > 0) remaining.set(fingerprint, Math.max(0, left - spent));
+    }
+  }
   const newFindings: Finding[] = [];
   let baselinedCount = 0;
   for (const f of findings) {

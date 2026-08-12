@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { parseDiff, resolveDiffPaths, shiftDiffMap, getIndexContents } from '../src/diff.js';
+import { parseDiff, parseDiffDetailed, mapOldLine, hunkIndexForNewLine, resolveDiffPaths, shiftDiffMap, getIndexContents } from '../src/diff.js';
 import { execSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -373,5 +373,70 @@ describe('getIndexContents batch parsing', () => {
     const bare = mkdtempSync(join(tmpdir(), 'vibecheck-nogit-'));
     expect(() => getIndexContents(bare, bare, ['x.ts'])).not.toThrow();
     rmSync(bare, { recursive: true, force: true });
+  });
+});
+
+describe('parseDiffDetailed hunks', () => {
+  it('parses explicit, omitted, and zero counts', () => {
+    const d = [
+      'diff --git a/f.ts b/f.ts',
+      'index 1111111..2222222 100644',
+      '--- a/f.ts',
+      '+++ b/f.ts',
+      '@@ -10,5 +12,8 @@',
+      ...Array(5).fill('-x'),
+      ...Array(8).fill('+y'),
+      '@@ -20 +23 @@',
+      '-a',
+      '+b',
+      '@@ -30,0 +34,2 @@',
+      '+c',
+      '+d',
+      '@@ -40,2 +45,0 @@',
+      '-e',
+      '-f',
+      '',
+    ].join('\n');
+    const { hunks } = parseDiffDetailed(d);
+    expect(hunks.get('f.ts')).toEqual([
+      { oldStart: 10, oldCount: 5, newStart: 12, newCount: 8 },
+      { oldStart: 20, oldCount: 1, newStart: 23, newCount: 1 },
+      { oldStart: 30, oldCount: 0, newStart: 34, newCount: 2 },
+      { oldStart: 40, oldCount: 2, newStart: 45, newCount: 0 },
+    ]);
+  });
+});
+
+describe('mapOldLine', () => {
+  const hunks = [
+    { oldStart: 3, oldCount: 0, newStart: 4, newCount: 2 }, // insertion AFTER old line 3
+    { oldStart: 10, oldCount: 4, newStart: 13, newCount: 1 }, // 4 lines replaced by 1
+  ];
+
+  it('maps lines above every hunk unchanged', () => {
+    expect(mapOldLine(hunks, 2)).toEqual({ line: 2 });
+    // The zero-count hunk inserts AFTER old line 3, so 3 itself is unshifted.
+    expect(mapOldLine(hunks, 3)).toEqual({ line: 3 });
+  });
+
+  it('shifts lines between hunks by the cumulative delta', () => {
+    expect(mapOldLine(hunks, 4)).toEqual({ line: 6 });
+    expect(mapOldLine(hunks, 9)).toEqual({ line: 11 });
+  });
+
+  it('reports in-hunk lines as the hunk, not a guessed line', () => {
+    expect(mapOldLine(hunks, 10)).toEqual({ hunk: 1 });
+    expect(mapOldLine(hunks, 13)).toEqual({ hunk: 1 });
+  });
+
+  it('applies both deltas below the last hunk', () => {
+    expect(mapOldLine(hunks, 14)).toEqual({ line: 13 }); // +2 then -3
+  });
+
+  it('finds the hunk containing a new-side line', () => {
+    expect(hunkIndexForNewLine(hunks, 4)).toBe(0);
+    expect(hunkIndexForNewLine(hunks, 13)).toBe(1);
+    expect(hunkIndexForNewLine(hunks, 3)).toBe(-1);
+    expect(hunkIndexForNewLine(hunks, 14)).toBe(-1);
   });
 });
