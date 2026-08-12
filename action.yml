@@ -16,7 +16,7 @@ inputs:
     required: false
     default: 'error'
   version:
-    description: 'vibecheck version to install (pin for reproducibility)'
+    description: 'vibecheck version to install (pin for reproducibility), or "workspace" to build and use the checkout itself'
     required: false
     default: 'latest'
   ignore:

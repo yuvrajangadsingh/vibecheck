@@ -48,9 +48,21 @@ escape_data() {
 }
 
 # --- Install vibecheck ---
-echo "::group::Installing vibecheck"
-npm install -g "@yuvrajangadsingh/vibecheck@${INPUT_VERSION:-latest}" 2>&1
-echo "::endgroup::"
+if [ "${INPUT_VERSION:-latest}" = "workspace" ]; then
+  # Scan with the code under review, not the previous npm release. The repo's
+  # own CI ran the action with @latest, so a PR changing the rules was scanned
+  # by the release BEFORE it: v1.16.1 went red on a finding 1.16.0 raised and
+  # the PR itself had already fixed. Anyone else vendoring vibecheck in-repo
+  # gets the same footgun, so this is an input rather than a special case.
+  echo "::group::Building vibecheck from the checkout"
+  (cd "$GITHUB_WORKSPACE" && npm ci && npm run build) 2>&1
+  npm install -g "$GITHUB_WORKSPACE" 2>&1
+  echo "::endgroup::"
+else
+  echo "::group::Installing vibecheck"
+  npm install -g "@yuvrajangadsingh/vibecheck@${INPUT_VERSION:-latest}" 2>&1
+  echo "::endgroup::"
+fi
 
 # --- Build args ---
 IGNORE_ARGS=()
