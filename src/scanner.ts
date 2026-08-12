@@ -294,11 +294,45 @@ export type DiffSelection = {
   baselineCredits: Map<string, number>;
 };
 
+/**
+ * True when a hunk changed nothing but whitespace.
+ *
+ * Reindenting a block leaves every line equal once leading/trailing space is
+ * stripped, which is the same normalization the fingerprint snippet uses.
+ * Rewriting a block does not. Position cannot tell those apart; content can.
+ */
+function whitespaceOnly(h: Hunk, lines: { base: string[]; next: string[] }): boolean {
+  // Blank lines are whitespace too: a formatter that inserts one between two
+  // functions changes the hunk's line COUNT while changing no code, so
+  // comparing slices positionally would reject it. Compare the sequence of
+  // non-blank trimmed lines, which is exactly "same code, laid out differently".
+  const norm = (src: string[], start: number, count: number) => {
+    const out: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const l = src[start - 1 + i];
+      if (l === undefined) return null;
+      // Runs of internal whitespace collapse too: `function a(){` becoming
+      // `function a() {` is a formatter, not an edit. The cost is that a
+      // whitespace change INSIDE a string literal reads as reformatting — but
+      // to be wrongly silenced by that, the finding must already carry an
+      // identical fingerprint on both sides, meaning it pre-existed anyway.
+      const t = l.trim().replace(/\s+/g, ' ');
+      if (t) out.push(t);
+    }
+    return out;
+  };
+  const a = norm(lines.base, h.oldStart, h.oldCount);
+  const b = norm(lines.next, h.newStart, h.newCount);
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every((l, i) => l === b[i]);
+}
+
 function selectForDiff(
   found: Finding[],
   changedLines: Set<number> | undefined,
   baseFindings: Finding[] | null,
-  hunks?: Hunk[]
+  hunks?: Hunk[],
+  lines?: { base: string[]; next: string[] }
 ): DiffSelection {
   const credits = new Map<string, number>();
   const credit = (key: string) => credits.set(key, (credits.get(key) ?? 0) + 1);
@@ -307,7 +341,7 @@ function selectForDiff(
   if (!baseFindings) {
     return { kept: found.filter((f) => changedLines.has(f.line)), baselineCredits: credits };
   }
-  if (!hunks) return selectByCountBudget(found, changedLines, baseFindings, credits);
+  if (!hunks || !lines) return selectByCountBudget(found, changedLines, baseFindings, credits);
 
   // With hunks we can ask WHERE each base finding went, instead of only how
   // many of each fingerprint existed. Exact mapping outside hunks is ground
@@ -348,9 +382,12 @@ function selectForDiff(
       }
     }
 
-    // (b) Inside each hunk: match 1:1, or a pure block shift where every
-    // occurrence keeps its offset from the hunk start (a reindented block).
-    // Anything else is unknown.
+    // (b) Inside each hunk, pair by CONTENT, not by position. Offsets are not
+    // identity: two unrelated functions whose eval() lines happen to sit at the
+    // same offsets within a replaced block would match, and a genuinely new
+    // finding would be swallowed. Whitespace-normalized equality of the whole
+    // hunk is what actually distinguishes "this block was reindented" from
+    // "this block was rewritten".
     const unknownNew = new Set<Finding>();
     const hunkIndexes = new Set<number>();
     for (const b of bases) if (!matchedBase.has(b) && 'hunk' in b.mapped) hunkIndexes.add(b.mapped.hunk);
@@ -363,16 +400,11 @@ function selectForDiff(
       const bIn = bases.filter((b) => !matchedBase.has(b) && 'hunk' in b.mapped && b.mapped.hunk === h);
       const nIn = news.filter((n) => !matchedNew.has(n) && hunkIndexForNewLine(hunks, n.line) === h);
       if (bIn.length === 0 || nIn.length === 0) continue; // fresh or removed; nothing to pair
-      const blockShift =
-        bIn.length === nIn.length &&
-        [...bIn]
-          .sort((a, b) => a.line - b.line)
-          .every(
-            (b, i) =>
-              [...nIn].sort((x, y) => x.line - y.line)[i].line - hunks[h].newStart ===
-              b.line - hunks[h].oldStart
-          );
-      if ((bIn.length === 1 && nIn.length === 1) || blockShift) {
+      // Being alone in the hunk is NOT identity either. Rewriting a function
+      // while keeping one eval() gives 1 base and 1 new occurrence, and pairing
+      // them silenced a finding the released behaviour reported. Only a hunk
+      // that changed nothing but whitespace proves the code is the same code.
+      if (whitespaceOnly(hunks[h], lines)) {
         for (const n of nIn) matchedNew.add(n);
         for (const b of bIn) matchedBase.add(b);
       } else {
@@ -500,11 +532,26 @@ export async function scan(
       const base = baseFindingsFor(item.path, config, options.baseContents);
       // Active and suppressed pools are matched independently: a suppressed
       // base occurrence must never consume a newly unsuppressed finding.
-      const active = selectForDiff(fileResult.findings, item.changedLines, base?.findings ?? null, item.hunks);
+      const contentLines = base
+        ? { base: (options.baseContents?.get(item.path) ?? '').split('\n'), next: item.content.split('\n') }
+        : undefined;
+      const active = selectForDiff(
+        fileResult.findings,
+        item.changedLines,
+        base?.findings ?? null,
+        item.hunks,
+        contentLines
+      );
       findings.push(...active.kept);
       for (const [k, v] of active.baselineCredits) baselineCredits.set(k, (baselineCredits.get(k) ?? 0) + v);
       suppressed.push(
-        ...selectForDiff(fileResult.suppressed, item.changedLines, base?.suppressed ?? null, item.hunks).kept
+        ...selectForDiff(
+          fileResult.suppressed,
+          item.changedLines,
+          base?.suppressed ?? null,
+          item.hunks,
+          contentLines
+        ).kept
       );
     }
     return finish();
@@ -568,11 +615,14 @@ export async function scan(
     const fileResult = scanContentDetailed(content, relPath, config);
     const base = baseFindingsFor(relPath, config, options.baseContents);
     const fileHunks = options.hunks?.get(relPath);
-    const active = selectForDiff(fileResult.findings, changedLines, base?.findings ?? null, fileHunks);
+    const contentLines = base
+      ? { base: (options.baseContents?.get(relPath) ?? '').split('\n'), next: content.split('\n') }
+      : undefined;
+    const active = selectForDiff(fileResult.findings, changedLines, base?.findings ?? null, fileHunks, contentLines);
     findings.push(...active.kept);
     for (const [k, v] of active.baselineCredits) baselineCredits.set(k, (baselineCredits.get(k) ?? 0) + v);
     suppressed.push(
-      ...selectForDiff(fileResult.suppressed, changedLines, base?.suppressed ?? null, fileHunks).kept
+      ...selectForDiff(fileResult.suppressed, changedLines, base?.suppressed ?? null, fileHunks, contentLines).kept
     );
   }
 
