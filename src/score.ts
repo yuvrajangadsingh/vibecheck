@@ -123,21 +123,27 @@ export function computeScore(
   const safeD50 = Number.isFinite(d50) && d50 > 0 ? d50 : D50;
   const kloc = Math.max(safeLines, MIN_LINES) / 1000;
 
-  const byRule = new Map<string, number>();
+  const byRule = new Map<string, { weighted: number; category: string }>();
   const byCategory = new Map<string, { weighted: number; count: number }>();
 
   for (const f of findings) {
     const w = SEVERITY_WEIGHT[f.severity] ?? 1;
-    byRule.set(f.rule, (byRule.get(f.rule) ?? 0) + w);
+    const r = byRule.get(f.rule) ?? { weighted: 0, category: f.category };
+    r.weighted += w;
+    byRule.set(f.rule, r);
     const c = byCategory.get(f.category) ?? { weighted: 0, count: 0 };
-    c.weighted += w;
     c.count += 1;
     byCategory.set(f.category, c);
   }
 
+  // The per-rule cap is applied INSIDE the category rollup, not only on the
+  // headline. Categories used to sum raw weights, so the breakdown added up to
+  // more than the density printed above it and the reader had to find the
+  // capped note to explain the gap. A breakdown that does not sum to the
+  // number it explains is not a breakdown.
   let density = 0;
   const cappedRules: ScoreResult['cappedRules'] = [];
-  for (const [rule, weighted] of byRule) {
+  for (const [rule, { weighted, category }] of byRule) {
     const raw = weighted / kloc;
     const capped = Math.min(raw, PER_RULE_CAP);
     if (raw > PER_RULE_CAP) {
@@ -148,6 +154,8 @@ export function computeScore(
       });
     }
     density += capped;
+    const c = byCategory.get(category)!;
+    c.weighted += capped * kloc; // stored as weight; divided back out below
   }
 
   // Half-life curve: every d50 points of density halves the score.
