@@ -567,7 +567,6 @@ export function getIndexContents(
   // Responses come back in request order: a header line, then the payload, or
   // "<spec> missing" for anything the index does not have.
   const reportPaths = [...repoPathFor.keys()];
-  const treeMisses: string[] = [];
   let cursor = 0;
   for (const reportPath of reportPaths) {
     const nl = batch.indexOf('\n', cursor);
@@ -577,9 +576,12 @@ export function getIndexContents(
 
     if (/\bmissing$/.test(header)) {
       if (baseTree) {
-        // Missing from the frozen tree is not the same as new: intent-to-add
-        // entries never enter a written tree. Re-check the live index below.
-        treeMisses.push(reportPath);
+        // Missing from the frozen tree is NOT evidence the file is new, and it
+        // must not be answered by reading the live index: that reopens the very
+        // race the frozen tree closes, and a path staged after the freeze came
+        // back with content the diff never described. Leave it unset — unknown
+        // base, so this file falls back to anchor matching.
+        continue;
       } else {
         // Absent from the index means the file is new, so everything in it is
         // introduced.
@@ -607,11 +609,6 @@ export function getIndexContents(
     if (size === 0) continue;
 
     out.set(reportPath, Buffer.from(body, 'latin1').toString('utf-8'));
-  }
-
-  if (treeMisses.length > 0) {
-    const fromIndex = getIndexContents(repoRoot, scanRoot, treeMisses);
-    for (const [k, v] of fromIndex) out.set(k, v);
   }
 
   return out;

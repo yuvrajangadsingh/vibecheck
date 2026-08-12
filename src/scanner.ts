@@ -301,6 +301,38 @@ export type DiffSelection = {
  * stripped, which is the same normalization the fingerprint snippet uses.
  * Rewriting a block does not. Position cannot tell those apart; content can.
  */
+/**
+ * Baseline credits for occurrences that were ACTIVE in the base and are
+ * suppressed now.
+ *
+ * Adding an inline suppression does not remove the finding from the baseline's
+ * ledger, and selection never reports it, so nobody spends its slot. That slot
+ * then absorbs a genuinely introduced duplicate and the run comes back clean.
+ * Only occurrences whose fingerprint existed as an ACTIVE base finding earn a
+ * credit: a base-suppressed occurrence never held an active slot to begin with.
+ */
+function newlySuppressedCredits(
+  nowSuppressed: Finding[],
+  activeBase: Finding[] | null
+): Map<string, number> {
+  const credits = new Map<string, number>();
+  if (!activeBase) return credits;
+  const budget = new Map<string, number>();
+  for (const b of activeBase) {
+    const k = findingFingerprint(b);
+    budget.set(k, (budget.get(k) ?? 0) + 1);
+  }
+  for (const f of nowSuppressed) {
+    const k = findingFingerprint(f);
+    const left = budget.get(k) ?? 0;
+    if (left > 0) {
+      budget.set(k, left - 1);
+      credits.set(k, (credits.get(k) ?? 0) + 1);
+    }
+  }
+  return credits;
+}
+
 function whitespaceOnly(h: Hunk, lines: { base: string[]; next: string[] }): boolean {
   // Blank lines are whitespace too: a formatter that inserts one between two
   // functions changes the hunk's line COUNT while changing no code, so
@@ -404,7 +436,13 @@ function selectForDiff(
       // while keeping one eval() gives 1 base and 1 new occurrence, and pairing
       // them silenced a finding the released behaviour reported. Only a hunk
       // that changed nothing but whitespace proves the code is the same code.
-      if (whitespaceOnly(hunks[h], lines)) {
+      //
+      // Counts must balance as well. Normalizing whitespace can MOVE lines
+      // between fingerprints — `eval("a  b")` and `eval("a b")` normalize alike
+      // but fingerprint differently — so a cosmetic-looking hunk can still take
+      // one fingerprint from 1 to 2. Matching every occurrence then swallows a
+      // genuinely introduced finding. Unequal counts fall back to unknown.
+      if (bIn.length === nIn.length && whitespaceOnly(hunks[h], lines)) {
         for (const n of nIn) matchedNew.add(n);
         for (const b of bIn) matchedBase.add(b);
       } else {
@@ -553,6 +591,8 @@ export async function scan(
           contentLines
         ).kept
       );
+      for (const [k, v] of newlySuppressedCredits(fileResult.suppressed, base?.findings ?? null))
+        baselineCredits.set(k, (baselineCredits.get(k) ?? 0) + v);
     }
     return finish();
   }
@@ -624,6 +664,8 @@ export async function scan(
     suppressed.push(
       ...selectForDiff(fileResult.suppressed, changedLines, base?.suppressed ?? null, fileHunks, contentLines).kept
     );
+    for (const [k, v] of newlySuppressedCredits(fileResult.suppressed, base?.findings ?? null))
+      baselineCredits.set(k, (baselineCredits.get(k) ?? 0) + v);
   }
 
   return finish();
