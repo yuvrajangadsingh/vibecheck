@@ -301,38 +301,6 @@ export type DiffSelection = {
  * stripped, which is the same normalization the fingerprint snippet uses.
  * Rewriting a block does not. Position cannot tell those apart; content can.
  */
-/**
- * Baseline credits for occurrences that were ACTIVE in the base and are
- * suppressed now.
- *
- * Adding an inline suppression does not remove the finding from the baseline's
- * ledger, and selection never reports it, so nobody spends its slot. That slot
- * then absorbs a genuinely introduced duplicate and the run comes back clean.
- * Only occurrences whose fingerprint existed as an ACTIVE base finding earn a
- * credit: a base-suppressed occurrence never held an active slot to begin with.
- */
-function newlySuppressedCredits(
-  nowSuppressed: Finding[],
-  activeBase: Finding[] | null
-): Map<string, number> {
-  const credits = new Map<string, number>();
-  if (!activeBase) return credits;
-  const budget = new Map<string, number>();
-  for (const b of activeBase) {
-    const k = findingFingerprint(b);
-    budget.set(k, (budget.get(k) ?? 0) + 1);
-  }
-  for (const f of nowSuppressed) {
-    const k = findingFingerprint(f);
-    const left = budget.get(k) ?? 0;
-    if (left > 0) {
-      budget.set(k, left - 1);
-      credits.set(k, (credits.get(k) ?? 0) + 1);
-    }
-  }
-  return credits;
-}
-
 function whitespaceOnly(h: Hunk, lines: { base: string[]; next: string[] }): boolean {
   // Blank lines are whitespace too: a formatter that inserts one between two
   // functions changes the hunk's line COUNT while changing no code, so
@@ -367,9 +335,11 @@ function selectForDiff(
   lines?: { base: string[]; next: string[] },
   /**
    * Occurrences present in the NEW file but suppressed, so absent from `found`.
-   * The move rule must know about them: an occurrence that is still there and
-   * merely silenced has not moved anywhere, and letting the move rule pair its
-   * base occurrence with a genuinely new finding drops the new one.
+   * They take part in matching exactly like active ones — an occurrence that is
+   * still there and merely silenced has not moved anywhere — but are never
+   * reported. Counting them instead of matching them let a FRESH suppressed
+   * occurrence spend a base slot it had no correspondence to, which then made a
+   * genuine move look introduced.
    */
   nowSuppressed?: Finding[]
 ): DiffSelection {
@@ -396,8 +366,15 @@ function selectForDiff(
     list.push({ line: b.line, mapped: mapOldLine(hunks, b.line) });
     baseByFp.set(key, list);
   }
+  // One candidate pool, one consumption ledger. Suppressed occurrences compete
+  // for base occurrences on equal terms and are filtered out at the end.
+  const reportable = new Set(found);
   const newByFp = new Map<string, Finding[]>();
-  for (const f of found) {
+  // Active occurrences are listed first so they win matches when several
+  // candidates compete for the same base occurrence. What is left over counts
+  // as introduced, and a suppressed occurrence carries an explicit "I know
+  // about this" marker, so it is the less surprising thing to be the new one.
+  for (const f of [...found, ...(nowSuppressed ?? [])]) {
     const key = findingFingerprint(f);
     const list = newByFp.get(key) ?? [];
     list.push(f);
@@ -464,23 +441,16 @@ function selectForDiff(
     // blame as blaming a reformat. Deliberately narrow: exactly one unmatched
     // occurrence on each side, or the ambiguity is real and stays unknown.
     {
-      // A base occurrence whose counterpart is merely SUPPRESSED in the new
-      // file has not moved — it is still sitting there, silenced. Spend those
-      // first, or the move rule pairs the base occurrence with a genuinely new
-      // finding somewhere else and the new one disappears.
-      let stillPresent = (nowSuppressed ?? []).filter((f) => findingFingerprint(f) === key).length;
-      const bLeft = bases.filter((b) => {
-        if (matchedBase.has(b)) return false;
-        if (stillPresent > 0) {
-          stillPresent--;
-          return false;
-        }
-        return true;
-      });
+      const bLeft = bases.filter((b) => !matchedBase.has(b));
       const nLeft = news.filter((n) => !matchedNew.has(n) && !unknownNew.has(n));
-      if (bLeft.length === 1 && nLeft.length === 1) {
+      // One base occurrence unaccounted for and one ACTIVE candidate for it:
+      // that is the move. Extra suppressed candidates do not create ambiguity,
+      // because they are the ones that end up counted as introduced and never
+      // reported anyway.
+      const nActive = nLeft.filter((n) => reportable.has(n));
+      if (bLeft.length === 1 && nActive.length === 1) {
         matchedBase.add(bLeft[0]);
-        matchedNew.add(nLeft[0]);
+        matchedNew.add(nActive[0]);
       }
     }
 
@@ -488,7 +458,9 @@ function selectForDiff(
       if (matchedNew.has(n)) {
         // Proven pre-existing: quiet even when its anchor line changed, which
         // is exactly the reformat case — an indent-only edit must not read as
-        // the author introducing the finding.
+        // the author introducing the finding. A suppressed occurrence that
+        // matched still earns the credit: its base counterpart is spoken for,
+        // and the baseline must not hand that slot to something else.
         credit(key);
       } else if (unknownNew.has(n)) {
         // Identical occurrences coexist in an ambiguous changed region. Keep
@@ -501,7 +473,7 @@ function selectForDiff(
     }
   }
 
-  return { kept: found.filter((f) => kept.has(f)), baselineCredits: credits };
+  return { kept: found.filter((f) => kept.has(f) && reportable.has(f)), baselineCredits: credits };
 }
 
 /**
@@ -626,8 +598,6 @@ export async function scan(
           contentLines
         ).kept
       );
-      for (const [k, v] of newlySuppressedCredits(fileResult.suppressed, base?.findings ?? null))
-        baselineCredits.set(k, (baselineCredits.get(k) ?? 0) + v);
     }
     return finish();
   }
@@ -706,8 +676,6 @@ export async function scan(
     suppressed.push(
       ...selectForDiff(fileResult.suppressed, changedLines, base?.suppressed ?? null, fileHunks, contentLines).kept
     );
-    for (const [k, v] of newlySuppressedCredits(fileResult.suppressed, base?.findings ?? null))
-      baselineCredits.set(k, (baselineCredits.get(k) ?? 0) + v);
   }
 
   return finish();
