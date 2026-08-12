@@ -89,6 +89,13 @@ export function parseDiff(diffOutput: string): DiffMap {
   const result: DiffMap = new Map();
   let currentFile: string | null = null;
   let lineNumber = 0;
+  // Headers (---, +++, index) only appear BETWEEN hunks. Checking for them
+  // positionally matters: a deleted source line `-- retries;` renders as
+  // `--- retries;` and an added `++ x;` as `+++ x;`, and matching those as
+  // headers ate the deletion (file missing from the map, false clean) or
+  // clobbered currentFile with garbage. Each new file's `diff` line ends the
+  // hunk; a headerless concatenation of raw hunks is not supported.
+  let inHunk = false;
 
   for (const rawLine of diffOutput.split('\n')) {
     // CRLF diffs would otherwise leave a trailing \r on header paths, making
@@ -97,17 +104,18 @@ export function parseDiff(diffOutput: string): DiffMap {
     // Reset currentFile on new diff block
     if (line.startsWith('diff ')) {
       currentFile = null;
+      inHunk = false;
       continue;
     }
 
     // New file header: +++ b/src/foo.ts
-    if (line.startsWith('+++ ')) {
+    if (!inHunk && line.startsWith('+++ ')) {
       currentFile = parseHeaderPath(line);
       continue;
     }
 
     // Skip --- headers and index lines
-    if (line.startsWith('--- ') || line.startsWith('index ')) {
+    if (!inHunk && (line.startsWith('--- ') || line.startsWith('index '))) {
       continue;
     }
 
@@ -120,6 +128,7 @@ export function parseDiff(diffOutput: string): DiffMap {
     const hunkMatch = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
     if (hunkMatch) {
       lineNumber = parseInt(hunkMatch[1], 10);
+      inHunk = true;
       continue;
     }
 
@@ -133,7 +142,16 @@ export function parseDiff(diffOutput: string): DiffMap {
       result.get(currentFile)!.add(lineNumber);
       lineNumber++;
     } else if (line.startsWith('-')) {
-      // Deleted line, don't increment line number
+      // Deleted line: no destination line number to record, but the FILE must
+      // still enter the map. A deletion-only change never got scanned at all,
+      // so deleting the `return` from a catch block — which CREATES
+      // no-console-error-only — reported nothing. With an (empty) entry the
+      // file is scanned, and introduced-finding detection judges it against
+      // the base; without a base, anchor matching keeps nothing, exactly as
+      // before. A pure rename emits no hunks and still produces no entry.
+      if (!result.has(currentFile)) {
+        result.set(currentFile, new Set());
+      }
     } else {
       // Context line
       lineNumber++;

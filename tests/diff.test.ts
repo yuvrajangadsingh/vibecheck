@@ -224,6 +224,65 @@ describe('resolveDiffPaths', () => {
   });
 });
 
+describe('parseDiff deletion-only hunks', () => {
+  const DIFF = `diff --git a/f.ts b/f.ts
+index 1111111..2222222 100644
+--- a/f.ts
++++ b/f.ts
+@@ -6 +5,0 @@ export function load() {
+-    return fallback();
+`;
+
+  it('records the file with an empty line set', () => {
+    // The file must enter the map or it is never scanned, and a deletion that
+    // CREATES a finding reports nothing. No destination lines exist to record.
+    const m = parseDiff(DIFF);
+    expect(m.has('f.ts')).toBe(true);
+    expect(m.get('f.ts')!.size).toBe(0);
+  });
+
+  // Headers only appear between hunks. A deleted source line `-- retries;`
+  // renders as `--- retries;` and matched the header check, eating the
+  // deletion — the file vanished from the map and the run reported clean.
+  it('does not mistake a deleted line starting with -- for a header', () => {
+    const d = [
+      'diff --git a/f.ts b/f.ts',
+      'index 1111111..2222222 100644',
+      '--- a/f.ts',
+      '+++ b/f.ts',
+      '@@ -7 +6,0 @@ export function load() {',
+      '--- retries;',
+      '',
+    ].join('\n');
+    const m = parseDiff(d);
+    expect(m.has('f.ts')).toBe(true);
+  });
+
+  it('does not mistake an added line starting with ++ for a file header', () => {
+    // `+++ x;` inside a hunk used to clobber currentFile with garbage, so the
+    // following added lines were attributed to a file that does not exist.
+    const d = [
+      'diff --git a/g.ts b/g.ts',
+      'index 1111111..2222222 100644',
+      '--- a/g.ts',
+      '+++ b/g.ts',
+      '@@ -0,0 +1,2 @@',
+      '+++ x;',
+      '+const after = 1;',
+      '',
+    ].join('\n');
+    const m = parseDiff(d);
+    expect([...(m.get('g.ts') ?? [])].sort()).toEqual([1, 2]);
+    expect(m.size).toBe(1);
+  });
+
+  it('still produces no entry for a hunkless file', () => {
+    // A pure rename emits headers but no hunks; it must stay skipped.
+    const m = parseDiff('diff --git a/old.ts b/new.ts\nsimilarity index 100%\nrename from old.ts\nrename to new.ts\n');
+    expect(m.size).toBe(0);
+  });
+});
+
 describe('shiftDiffMap', () => {
   const map = (o: Record<string, number[]>) =>
     new Map(Object.entries(o).map(([k, v]) => [k, new Set(v)]));

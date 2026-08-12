@@ -214,10 +214,12 @@ export function readStagedSnapshot(
       continue;
     }
 
-    // Readable text with no added lines: a pure rename or mode change. Nothing
-    // to lint, and nothing wrong.
+    // No entry at all means no hunks: a pure rename or mode change, nothing
+    // to lint. An EMPTY entry is different — it is a deletion-only change,
+    // which can create a finding (deleting the `return` from a catch block
+    // creates no-console-error-only) and must be scanned against the base.
     const changedLines = lineMap.get(entry.path);
-    if (!changedLines || changedLines.size === 0) continue;
+    if (!changedLines) continue;
 
     // The same path at the base tree. Absent means the file is new, so empty
     // content is right: everything in it counts as introduced.

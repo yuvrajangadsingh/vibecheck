@@ -952,6 +952,38 @@ describe('diff mode reports findings the change introduced', () => {
     expect(res.stdout).not.toContain('no-eval');
   });
 
+  // Deletions produce no added lines, so the file never entered the diff map
+  // and a deletion that CREATED a finding was invisible in every diff mode.
+  it('reports a finding created by a deletion-only change', () => {
+    const dir = repo({
+      'f.ts': 'export function load() {\n  try {\n    return read();\n  } catch (err) {\n    console.error(err);\n    return fallback();\n  }\n}\n',
+    });
+    writeFileSync(
+      join(dir, 'f.ts'),
+      'export function load() {\n  try {\n    return read();\n  } catch (err) {\n    console.error(err);\n  }\n}\n'
+    );
+
+    const unstaged = run(['--diff', '--format', 'compact', '--severity', 'warn', dir]);
+    expect(unstaged.stdout).toContain('no-console-error-only');
+
+    execSync('git add f.ts', { cwd: dir, stdio: 'ignore' });
+    const staged = run(['--staged', '--format', 'compact', '--severity', 'warn', dir]);
+    expect(staged.stdout).toContain('no-console-error-only');
+  });
+
+  it('does not blame a pre-existing finding when an unrelated line is deleted', () => {
+    const dir = repo({
+      'g.ts': 'export function a() {\n  try {\n    return r();\n  } catch (e) {\n    console.error(e);\n  }\n}\nconst unused = 1;\n',
+    });
+    writeFileSync(
+      join(dir, 'g.ts'),
+      'export function a() {\n  try {\n    return r();\n  } catch (e) {\n    console.error(e);\n  }\n}\n'
+    );
+
+    const res = run(['--diff', '--format', 'compact', '--severity', 'warn', dir]);
+    expect(res.stdout).not.toContain('no-console-error-only');
+  });
+
   it('applies the same rule to --staged', () => {
     const dir = repo({
       'f.ts': 'export function load() {\n  try {\n    return read();\n  } catch (err) {\n    return fallback();\n  }\n}\n',
