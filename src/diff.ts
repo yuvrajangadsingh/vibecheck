@@ -133,7 +133,16 @@ export function parseDiff(diffOutput: string): DiffMap {
       result.get(currentFile)!.add(lineNumber);
       lineNumber++;
     } else if (line.startsWith('-')) {
-      // Deleted line, don't increment line number
+      // Deleted line: no destination line number to record, but the FILE must
+      // still enter the map. A deletion-only change never got scanned at all,
+      // so deleting the `return` from a catch block — which CREATES
+      // no-console-error-only — reported nothing. With an (empty) entry the
+      // file is scanned, and introduced-finding detection judges it against
+      // the base; without a base, anchor matching keeps nothing, exactly as
+      // before. A pure rename emits no hunks and still produces no entry.
+      if (!result.has(currentFile)) {
+        result.set(currentFile, new Set());
+      }
     } else {
       // Context line
       lineNumber++;

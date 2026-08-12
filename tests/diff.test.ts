@@ -224,6 +224,30 @@ describe('resolveDiffPaths', () => {
   });
 });
 
+describe('parseDiff deletion-only hunks', () => {
+  const DIFF = `diff --git a/f.ts b/f.ts
+index 1111111..2222222 100644
+--- a/f.ts
++++ b/f.ts
+@@ -6 +5,0 @@ export function load() {
+-    return fallback();
+`;
+
+  it('records the file with an empty line set', () => {
+    // The file must enter the map or it is never scanned, and a deletion that
+    // CREATES a finding reports nothing. No destination lines exist to record.
+    const m = parseDiff(DIFF);
+    expect(m.has('f.ts')).toBe(true);
+    expect(m.get('f.ts')!.size).toBe(0);
+  });
+
+  it('still produces no entry for a hunkless file', () => {
+    // A pure rename emits headers but no hunks; it must stay skipped.
+    const m = parseDiff('diff --git a/old.ts b/new.ts\nsimilarity index 100%\nrename from old.ts\nrename to new.ts\n');
+    expect(m.size).toBe(0);
+  });
+});
+
 describe('shiftDiffMap', () => {
   const map = (o: Record<string, number[]>) =>
     new Map(Object.entries(o).map(([k, v]) => [k, new Set(v)]));
