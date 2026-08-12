@@ -36,3 +36,6 @@ jobs:
           severity: warn
           fail-on: error
           ignore: "tests/**"
+          # Scan with THIS checkout, not the previous npm release — @latest
+          # made CI red on findings the PR under review had already fixed.
+          version: workspace
