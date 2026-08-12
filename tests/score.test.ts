@@ -180,6 +180,24 @@ describe('slop score', () => {
     expect(computeScore([warn], 1000, -30).d50).toBeGreaterThan(0);
   });
 
+  // The categories exist to explain the headline density. They used to sum
+  // raw weights while the headline summed capped ones, so the breakdown added
+  // to MORE than the number above it whenever a rule hit the cap, and the
+  // reader had to find the capped note and do the arithmetic.
+  it('category densities sum to the headline density, even when a rule is capped', () => {
+    const f = (rule: string, category: string, n: number) =>
+      Array.from({ length: n }, () => ({ rule, category, severity: 'warn' }) as never);
+    // 40 warns of one rule = 120 weighted over 1 kloc -> raw 120, capped at 20.
+    const r = computeScore([...f('no-deep-nesting', 'code-quality', 40), ...f('no-eval', 'security', 2)], 1000);
+
+    expect(r.cappedRules.length).toBe(1);
+    const sum = r.categories.reduce((a, c) => a + c.perKloc, 0);
+    expect(sum).toBeCloseTo(r.density, 1);
+    // And the capped category reports the capped value, not the raw 120.
+    const cq = r.categories.find((c) => c.category === 'code-quality')!;
+    expect(cq.perKloc).toBe(20);
+  });
+
   it('severity weights are ordered and explicit', () => {
     expect(SEVERITY_WEIGHT.error).toBeGreaterThan(SEVERITY_WEIGHT.warn);
     expect(SEVERITY_WEIGHT.warn).toBeGreaterThan(SEVERITY_WEIGHT.info);
