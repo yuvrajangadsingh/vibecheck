@@ -89,6 +89,13 @@ export function parseDiff(diffOutput: string): DiffMap {
   const result: DiffMap = new Map();
   let currentFile: string | null = null;
   let lineNumber = 0;
+  // Headers (---, +++, index) only appear BETWEEN hunks. Checking for them
+  // positionally matters: a deleted source line `-- retries;` renders as
+  // `--- retries;` and an added `++ x;` as `+++ x;`, and matching those as
+  // headers ate the deletion (file missing from the map, false clean) or
+  // clobbered currentFile with garbage. Each new file's `diff` line ends the
+  // hunk; a headerless concatenation of raw hunks is not supported.
+  let inHunk = false;
 
   for (const rawLine of diffOutput.split('\n')) {
     // CRLF diffs would otherwise leave a trailing \r on header paths, making
@@ -97,17 +104,18 @@ export function parseDiff(diffOutput: string): DiffMap {
     // Reset currentFile on new diff block
     if (line.startsWith('diff ')) {
       currentFile = null;
+      inHunk = false;
       continue;
     }
 
     // New file header: +++ b/src/foo.ts
-    if (line.startsWith('+++ ')) {
+    if (!inHunk && line.startsWith('+++ ')) {
       currentFile = parseHeaderPath(line);
       continue;
     }
 
     // Skip --- headers and index lines
-    if (line.startsWith('--- ') || line.startsWith('index ')) {
+    if (!inHunk && (line.startsWith('--- ') || line.startsWith('index '))) {
       continue;
     }
 
@@ -120,6 +128,7 @@ export function parseDiff(diffOutput: string): DiffMap {
     const hunkMatch = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
     if (hunkMatch) {
       lineNumber = parseInt(hunkMatch[1], 10);
+      inHunk = true;
       continue;
     }
 
