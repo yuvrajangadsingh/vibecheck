@@ -227,10 +227,29 @@ reported on did not move:
 ```
 
 That also covers a function crossing the length threshold, whose declaration
-never changed, and a build-time guard removed from above an untouched
-`console.log`. It deliberately does not resurface a finding that was already
-there: editing one line inside a function that was already too long stays
-quiet, because that debt is not yours.
+never changed, a build-time guard removed from above an untouched
+`console.log`, and a line deleted from a block so that what remains is a
+finding. It deliberately does not resurface a finding that was already there:
+editing one line inside a function that was already too long stays quiet,
+because that debt is not yours.
+
+**Findings are matched by position, not by counting them.** Diff mode reads the
+hunks, so it knows where each pre-existing finding ended up. That is what makes
+the three cases below behave:
+
+- **Reformatting.** Reindenting a finding's line, or inserting a blank line
+  above it, leaves the finding provably unchanged, so it stays quiet. Running a
+  formatter does not make its output your fault.
+- **Duplicates.** A file with one `eval()` that gains a second identical one
+  reports the new one, not the old. Counting alone could only tell you there
+  was one more than before, not which.
+- **Moves.** Relocating code does not introduce the finding that travelled with
+  it, so a move is quiet at the destination.
+
+Where genuine ambiguity remains — identical findings in a block that was
+rewritten, or a move that is also a duplication — it reports on changed lines
+rather than guessing which copy you added. Over-reporting is recoverable;
+blaming the wrong line is not.
 
 `--staged` reads the **index**, not the working tree, so a file staged and then
 edited is checked as it will be committed. `--diff-stdin` verifies the piped
@@ -242,7 +261,7 @@ files over the 1MB cap, and staged blobs that are binary, symlinks or
 submodules exit 2 with the path named. Files you mean to skip belong in
 `ignore`, which stays silent.
 
-Known limitations, all needing non-default git configuration:
+Known limitations:
 
 - A `.gitattributes` **clean filter** shifts `--diff` line numbers, because git
   describes filtered content while the working tree holds the original.
@@ -253,14 +272,12 @@ Known limitations, all needing non-default git configuration:
   scan refuses it.
 - A stream that **modifies then deletes** the same file is not refused the way
   other multi-patch streams are.
-- A **deletion-only** change is invisible: only added lines enter the diff map,
-  so deleting a line that creates a finding reports nothing.
 - A staged move below git's **rename-similarity threshold** arrives as an add
   plus a delete, so the destination reads as a new file.
-- When a file already contains an identical finding and gains another, the
-  copies cannot be told apart, so that group falls back to changed-line
-  matching and the new one may go unreported. A baseline can hide it for the
-  same reason.
+- A formatter that changes spacing **inside** a line, `function a(){` to
+  `function a() {`, is not recognised as reformatting, because the only
+  normalization that would equate those also equates `foo bar` with `foobar`.
+  Such a change reports on its changed lines.
 
 **Not available in diff mode.** `--score`, `--min-score` and `--badge` refuse to
 run alongside `--diff`, `--staged` or `--diff-stdin`. The score is findings per

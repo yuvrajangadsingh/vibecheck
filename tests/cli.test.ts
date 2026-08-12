@@ -1093,6 +1093,32 @@ describe('diff mode reports findings the change introduced', () => {
     expect(res.stdout).not.toContain('no-console-error-only');
   });
 
+  // Relocating code does not introduce the finding that rode along with it.
+  // Blaming the destination is the same false blame as blaming a reformat.
+  it('stays quiet when a finding is moved rather than introduced', () => {
+    const MOVED = 'const value = eval(payload);';
+    const pad = Array.from({ length: 12 }, (_, i) => `const p${i} = ${i};`).join('\n');
+    const dir = repo({ 'f.ts': `${MOVED}\n` + pad + '\n' });
+    writeFileSync(join(dir, 'f.ts'), pad + `\n${MOVED}\n`);
+
+    const res = run(['--diff', '--format', 'compact', '--fail-on', 'never', dir]);
+    expect(res.stdout.trim()).toBe('');
+  });
+
+  it('does not silence anything when a move is also a duplication', () => {
+    // One deleted, two added, all identical. One of the two accounts for the
+    // move and one is genuinely new, and nothing distinguishes them — so move
+    // detection deliberately does not fire and both are reported, which is the
+    // released behaviour for ambiguity. Over-reporting by one beats guessing
+    // wrong about which copy the author added.
+    const DUP = 'const value = eval(payload);';
+    const dir = repo({ 'f.ts': `${DUP}\nconst keep = 1;\n` });
+    writeFileSync(join(dir, 'f.ts'), `const keep = 1;\n${DUP}\n${DUP}\n`);
+
+    const res = run(['--diff', '--format', 'compact', '--fail-on', 'never', dir]);
+    expect(res.stdout.match(/no-eval/g)?.length).toBe(2);
+  });
+
   it('applies the same rule to --staged', () => {
     const dir = repo({
       'f.ts': 'export function load() {\n  try {\n    return read();\n  } catch (err) {\n    return fallback();\n  }\n}\n',

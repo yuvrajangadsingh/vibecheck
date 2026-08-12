@@ -450,6 +450,21 @@ function selectForDiff(
       }
     }
 
+    // (c) A move. The base occurrence is gone from where it should have been
+    // and an identical one turned up somewhere else, with nothing else
+    // competing for either. Relocating code does not introduce the finding
+    // that rode along with it, and blaming the destination is the same false
+    // blame as blaming a reformat. Deliberately narrow: exactly one unmatched
+    // occurrence on each side, or the ambiguity is real and stays unknown.
+    {
+      const bLeft = bases.filter((b) => !matchedBase.has(b));
+      const nLeft = news.filter((n) => !matchedNew.has(n) && !unknownNew.has(n));
+      if (bLeft.length === 1 && nLeft.length === 1) {
+        matchedBase.add(bLeft[0]);
+        matchedNew.add(nLeft[0]);
+      }
+    }
+
     for (const n of news) {
       if (matchedNew.has(n)) {
         // Proven pre-existing: quiet even when its anchor line changed, which
