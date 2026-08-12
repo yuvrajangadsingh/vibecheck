@@ -1119,6 +1119,27 @@ describe('diff mode reports findings the change introduced', () => {
     expect(res.stdout.match(/no-eval/g)?.length).toBe(2);
   });
 
+  // The move rule only sees ACTIVE findings. Suppressing the old occurrence
+  // removes it from that pool, so the rule paired its base occurrence with a
+  // genuinely new one elsewhere and called it a move — dropping the new
+  // finding. An occurrence that is merely silenced has not gone anywhere.
+  it('does not mistake a suppressed old occurrence for a move', () => {
+    const DUP = 'const value = eval(payload);';
+    const pad = Array.from({ length: 18 }, (_, i) => `const p${i} = ${i};`).join('\n');
+    const dir = repo({ 'f.ts': `${DUP}\n` + pad + '\n' });
+    writeFileSync(
+      join(dir, 'f.ts'),
+      `// vibecheck-disable-next-line no-eval\n${DUP}\n` + pad + `\n${DUP}\n`
+    );
+
+    const res = run(['--diff', '--format', 'compact', '--fail-on', 'never', dir]);
+    expect(res.stdout).toContain('no-eval');
+
+    execSync('git add f.ts', { cwd: dir, stdio: 'ignore' });
+    const staged = run(['--staged', '--format', 'compact', '--fail-on', 'never', dir]);
+    expect(staged.stdout).toContain('no-eval');
+  });
+
   it('applies the same rule to --staged', () => {
     const dir = repo({
       'f.ts': 'export function load() {\n  try {\n    return read();\n  } catch (err) {\n    return fallback();\n  }\n}\n',

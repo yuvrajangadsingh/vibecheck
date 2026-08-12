@@ -364,7 +364,14 @@ function selectForDiff(
   changedLines: Set<number> | undefined,
   baseFindings: Finding[] | null,
   hunks?: Hunk[],
-  lines?: { base: string[]; next: string[] }
+  lines?: { base: string[]; next: string[] },
+  /**
+   * Occurrences present in the NEW file but suppressed, so absent from `found`.
+   * The move rule must know about them: an occurrence that is still there and
+   * merely silenced has not moved anywhere, and letting the move rule pair its
+   * base occurrence with a genuinely new finding drops the new one.
+   */
+  nowSuppressed?: Finding[]
 ): DiffSelection {
   const credits = new Map<string, number>();
   const credit = (key: string) => credits.set(key, (credits.get(key) ?? 0) + 1);
@@ -457,7 +464,19 @@ function selectForDiff(
     // blame as blaming a reformat. Deliberately narrow: exactly one unmatched
     // occurrence on each side, or the ambiguity is real and stays unknown.
     {
-      const bLeft = bases.filter((b) => !matchedBase.has(b));
+      // A base occurrence whose counterpart is merely SUPPRESSED in the new
+      // file has not moved — it is still sitting there, silenced. Spend those
+      // first, or the move rule pairs the base occurrence with a genuinely new
+      // finding somewhere else and the new one disappears.
+      let stillPresent = (nowSuppressed ?? []).filter((f) => findingFingerprint(f) === key).length;
+      const bLeft = bases.filter((b) => {
+        if (matchedBase.has(b)) return false;
+        if (stillPresent > 0) {
+          stillPresent--;
+          return false;
+        }
+        return true;
+      });
       const nLeft = news.filter((n) => !matchedNew.has(n) && !unknownNew.has(n));
       if (bLeft.length === 1 && nLeft.length === 1) {
         matchedBase.add(bLeft[0]);
@@ -593,7 +612,8 @@ export async function scan(
         item.changedLines,
         base?.findings ?? null,
         item.hunks,
-        contentLines
+        contentLines,
+        fileResult.suppressed
       );
       findings.push(...active.kept);
       for (const [k, v] of active.baselineCredits) baselineCredits.set(k, (baselineCredits.get(k) ?? 0) + v);
@@ -673,7 +693,14 @@ export async function scan(
     const contentLines = base
       ? { base: (options.baseContents?.get(relPath) ?? '').split('\n'), next: content.split('\n') }
       : undefined;
-    const active = selectForDiff(fileResult.findings, changedLines, base?.findings ?? null, fileHunks, contentLines);
+    const active = selectForDiff(
+      fileResult.findings,
+      changedLines,
+      base?.findings ?? null,
+      fileHunks,
+      contentLines,
+      fileResult.suppressed
+    );
     findings.push(...active.kept);
     for (const [k, v] of active.baselineCredits) baselineCredits.set(k, (baselineCredits.get(k) ?? 0) + v);
     suppressed.push(
