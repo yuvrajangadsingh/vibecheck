@@ -288,14 +288,14 @@ describe('rules subcommand', () => {
     const res = run(['rules']);
     expect(res.status).toBe(0);
     expect(res.stdout).toMatch(/^no-eval\s+error\s+security\s+js,ts/m);
-    expect(res.stdout).toContain('39 rules');
+    expect(res.stdout).toContain('40 rules');
   });
 
   it('--json emits one structured row per rule', () => {
     const res = run(['rules', '--json']);
     expect(res.status).toBe(0);
     const rows = JSON.parse(res.stdout);
-    expect(rows.length).toBe(39);
+    expect(rows.length).toBe(40);
     for (const row of rows) {
       expect(row.id).toBeTruthy();
       expect(['error', 'warn', 'info']).toContain(row.severity);
