@@ -13,9 +13,9 @@ describe('rule definitions', () => {
     expect(unique.size).toBe(ids.length);
   });
 
-  it('should have 39 rules total', () => {
+  it('should have 40 rules total', () => {
     const total = allRules.length + allMultilineRules.length;
-    expect(total).toBe(39);
+    expect(total).toBe(40);
   });
 
   it('all rules should have required fields', () => {
@@ -583,6 +583,7 @@ describe('python rules', () => {
   const pyObvious = allRules.find(r => r.id === 'no-py-obvious-comments')!;
   const typeIgnore = allRules.find(r => r.id === 'no-type-ignore-blanket')!;
   const passExcept = allMultilineRules.find(r => r.id === 'no-pass-except')!;
+  const logSwallow = allMultilineRules.find(r => r.id === 'no-py-log-swallow')!;
 
   it('detects eval/exec/os.system', () => {
     expect(pyEval.pattern.test('result = eval(user_input)')).toBe(true);
@@ -694,6 +695,145 @@ describe('python rules', () => {
     const lines = ['try:', '    risky()', 'except Exception as e:', '    logger.error(e)', '    raise'];
     const findings = passExcept.detect(lines, 'test.py');
     expect(findings.length).toBe(0);
+  });
+
+  it('detects a handler whose only statement is a log call', () => {
+    const lines = ['try:', '    risky()', 'except Exception as e:', '    logger.error("failed: %s", e)'];
+    expect(logSwallow.detect(lines, 'test.py').length).toBe(1);
+  });
+
+  it('detects the single-line form', () => {
+    const lines = ['try:', '    risky()', 'except ValueError as e: logger.exception(e)'];
+    expect(logSwallow.detect(lines, 'test.py').length).toBe(1);
+  });
+
+  it('skips a handler that re-raises after logging', () => {
+    const lines = ['try:', '    risky()', 'except Exception as e:', '    logger.error(e)', '    raise'];
+    expect(logSwallow.detect(lines, 'test.py').length).toBe(0);
+  });
+
+  it('skips a handler that returns a fallback after logging', () => {
+    const lines = ['try:', '    risky()', 'except Exception as e:', '    logger.error(e)', '    return None'];
+    expect(logSwallow.detect(lines, 'test.py').length).toBe(0);
+  });
+
+  it('skips a handler that logs and then does real work', () => {
+    const lines = ['try:', '    risky()', 'except Exception as e:', '    logger.error(e)', '    self.failures += 1'];
+    expect(logSwallow.detect(lines, 'test.py').length).toBe(0);
+  });
+
+  // KeyboardInterrupt on the way out is a legitimate goodbye message, not a
+  // swallowed error. adk-python has exactly this under __main__.
+  it('skips KeyboardInterrupt and SystemExit', () => {
+    const ki = ['try:', '    run()', 'except KeyboardInterrupt:', '    logger.warning("interrupted")'];
+    const se = ['try:', '    run()', 'except SystemExit:', '    logger.info("exiting")'];
+    expect(logSwallow.detect(ki, 'test.py').length).toBe(0);
+    expect(logSwallow.detect(se, 'test.py').length).toBe(0);
+  });
+
+  it('leaves bare except to no-bare-except', () => {
+    const lines = ['try:', '    risky()', 'except:', '    logger.error("boom")'];
+    expect(logSwallow.detect(lines, 'test.py').length).toBe(0);
+  });
+
+  // The receiver has to look like a logger, or every fluent api that happens
+  // to expose .error()/.warning() would trip the rule.
+  it('does not treat a non-logger receiver as logging', () => {
+    const lines = ['try:', '    risky()', 'except Exception as e:', '    response.error(e)'];
+    expect(logSwallow.detect(lines, 'test.py').length).toBe(0);
+  });
+
+  it('accepts logger-ish receivers', () => {
+    for (const call of ['logging.error(e)', 'self.logger.warning(e)', 'LOG.critical(e)', '_log.debug(e)', 'logger.log(logging.ERROR, e)']) {
+      const lines = ['try:', '    risky()', 'except Exception as e:', '    ' + call];
+      expect(logSwallow.detect(lines, 'test.py').length).toBe(1);
+    }
+  });
+
+  it('honours a noqa escape hatch', () => {
+    const lines = ['try:', '    risky()', 'except Exception as e:  # noqa', '    logger.error(e)'];
+    expect(logSwallow.detect(lines, 'test.py').length).toBe(0);
+  });
+
+  // Google style wraps the arguments onto their own lines; that is still one
+  // statement. 57 of 109 real hits in adk-python look like this.
+  it('treats a wrapped logging call as one statement', () => {
+    const lines = ['try:', '    risky()', 'except Exception as e:', '    logging.error(', '        "failed: %s", e, exc_info=True', '    )'];
+    expect(logSwallow.detect(lines, 'test.py').length).toBe(1);
+  });
+
+  it('still sees a real statement after a wrapped logging call', () => {
+    const lines = ['try:', '    risky()', 'except Exception as e:', '    logging.error(', '        "failed: %s", e', '    )', '    self.failures += 1'];
+    expect(logSwallow.detect(lines, 'test.py').length).toBe(0);
+  });
+
+  // Expecting 1 here, not 0: a broken bracket counter would also return 0 by
+  // giving up on the handler, so a positive is the only proof it worked.
+  it('does not count brackets inside strings or comments', () => {
+    const lines = ['try:', '    risky()', 'except Exception as e:', '    logger.error("unbalanced ( here")  # and [ here'];
+    expect(logSwallow.detect(lines, 'test.py').length).toBe(1);
+  });
+
+  it('is not fooled by a logging call that is only the start of the statement', () => {
+    for (const stmt of ['logger.error(e); raise', 'logger.error(e); recover()', 'logger.error(e).notify()']) {
+      const lines = ['try:', '    risky()', 'except Exception as e:', '    ' + stmt];
+      expect(logSwallow.detect(lines, 'test.py').length).toBe(0);
+      expect(logSwallow.detect(['except Exception as e: ' + stmt], 'test.py').length).toBe(0);
+    }
+  });
+
+  it('does not treat catalog/dialog/backlog receivers as loggers', () => {
+    for (const call of ['catalog.error(e)', 'dialog.warning(e)', 'backlog.info(e)']) {
+      const lines = ['try:', '    risky()', 'except Exception as e:', '    ' + call];
+      expect(logSwallow.detect(lines, 'test.py').length).toBe(0);
+    }
+  });
+
+  it('skips except blocks quoted inside docstrings', () => {
+    const lines = ['DOC = """', 'except Exception as e:', '    logger.error(e)', '"""', 'x = 1'];
+    expect(logSwallow.detect(lines, 'test.py').length).toBe(0);
+  });
+
+  // Python ignores comment-only lines for indentation, so this handler has
+  // a log call and a return.
+  it('does not let a dedented comment end the handler', () => {
+    const lines = ['try:', '    risky()', 'except Exception as e:', '    logger.error(e)', '# dedented comment', '    return fallback()'];
+    expect(logSwallow.detect(lines, 'test.py').length).toBe(0);
+  });
+
+  it('finds the suite colon past tuples, subscripts and strings', () => {
+    for (const header of ['except (A, B) as e:', 'except errors["cache:miss"] as e:', 'except* ValueError as e:', 'except (SystemExit, ValueError):']) {
+      expect(logSwallow.detect([header + ' logger.error(e)'], 'test.py').length).toBe(1);
+      expect(logSwallow.detect([header, '    logger.error(e)'], 'test.py').length).toBe(1);
+    }
+    expect(logSwallow.detect(['except errors["x:logger.error(e)"] as e: recover()'], 'test.py').length).toBe(0);
+  });
+
+  // Known miss, kept on purpose: a backslash continuation is not tracked.
+  it('does not follow a backslash continuation', () => {
+    const lines = ['try:', '    risky()', 'except Exception as e:', '    logger.error \\', '        (e)'];
+    expect(logSwallow.detect(lines, 'test.py').length).toBe(0);
+  });
+
+  it('reports through scanContent with rule, line and severity, and honours disable-next-line', () => {
+    const config = loadConfig();
+    const content = ['try:', '    risky()', 'except Exception as e:', '    logger.error(e)', ''].join('\n');
+    const found = scanContent(content, 'test.py', config).filter(f => f.rule === 'no-py-log-swallow');
+    expect(found.length).toBe(1);
+    expect(found[0].line).toBe(3);
+    expect(found[0].severity).toBe('info');
+    const suppressed = ['try:', '    risky()', '# vibecheck-disable-next-line no-py-log-swallow', 'except Exception as e:', '    logger.error(e)', ''].join('\n');
+    expect(scanContent(suppressed, 'test.py', config).filter(f => f.rule === 'no-py-log-swallow').length).toBe(0);
+  });
+
+  it('ignores a trailing comment on the except line', () => {
+    const lines = ['try:', '    risky()', 'except Exception:  # pylint: disable=broad-except', '    logger.exception("failed")'];
+    expect(logSwallow.detect(lines, 'test.py').length).toBe(1);
+  });
+
+  it('does not run past the end of the handler', () => {
+    const lines = ['try:', '    risky()', 'except Exception as e:', '    logger.error(e)', '', 'def next_fn():', '    return 1'];
+    expect(logSwallow.detect(lines, 'test.py').length).toBe(1);
   });
 
   it('detects AI TODOs in Python comments', () => {
