@@ -538,7 +538,7 @@ ESLint catches syntax and style issues. vibecheck catches patterns that are spec
 
 | | vibecheck | ESLint | sloppylint |
 |---|---|---|---|
-| AI-specific rules | 34 | 0 | 100+ |
+| AI-specific rules | 40 | 0 | 100+ |
 | Hedging comments | yes | no | yes |
 | Hallucinated imports | yes | no | yes |
 | Stub detection | yes | no | yes |
