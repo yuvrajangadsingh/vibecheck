@@ -22,9 +22,12 @@ export type Rule = {
    * Set this on rules that target a code CONSTRUCT: writing "we removed the
    * eval() call" in a comment is not calling eval. Leave it off for rules that
    * target comment TEXT (no-ai-todo, no-ai-attribution), which must keep
-   * seeing comments to work at all.
+   * seeing comments to work at all, and for rules that match inside a string
+   * (no-sql-concat), which masking blanks. Those use skipComments.
    */
   codeOnly?: boolean;
+  /** Match against the line with only comments blanked; strings are kept. */
+  skipComments?: boolean;
 };
 
 export type MultilineRule = {

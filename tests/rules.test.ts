@@ -1331,3 +1331,42 @@ describe('codeOnly rules ignore comments', () => {
     expect(hits('// TODO: implement validation\n', 'no-ai-todo')).toHaveLength(1);
   });
 });
+
+/**
+ * no-sql-concat matches the SQL inside a string, so it cannot run on masked
+ * lines. It was codeOnly from v1.16.1 to v1.21.0 and fired on nothing; the
+ * pattern tests above kept passing because they never go through the scanner.
+ */
+describe('no-sql-concat through the scanner', () => {
+  const config = loadConfig();
+  const hits = (content: string) =>
+    scanContent(content, 'src/db.ts', config).filter(f => f.rule === 'no-sql-concat');
+
+  it('flags a query built with +', () => {
+    expect(hits('const q = "SELECT * FROM users WHERE id = " + id;\n')).toHaveLength(1);
+  });
+
+  it('flags a query built with a template interpolation', () => {
+    expect(hits('const q = `SELECT * FROM users WHERE id = ${id}`;\n')).toHaveLength(1);
+  });
+
+  it('skips a comment that describes one', () => {
+    expect(hits('// real query from UI copy shaped like SQL ("Delete from " + folder)\n')).toHaveLength(0);
+    expect(hits('/**\n * e.g. "SELECT * FROM users WHERE id = " + id is unsafe\n */\n')).toHaveLength(0);
+  });
+
+  it('skips a parameterized query', () => {
+    expect(hits('db.query("SELECT * FROM users WHERE id = $1", [id]);\n')).toHaveLength(0);
+  });
+
+  it('still flags a query after a closed comment or on a * continuation line', () => {
+    expect(hits('/* legacy */ db.query("SELECT * FROM users WHERE id = " + id);\n')).toHaveLength(1);
+    expect(hits('const total = factor\n  * db.query("SELECT * FROM users WHERE id = " + id).rowCount;\n')).toHaveLength(1);
+  });
+
+  it('skips trailing, unstarred and JSX comments', () => {
+    expect(hits('const ok = true; // "SELECT * FROM users WHERE id = " + id\n')).toHaveLength(0);
+    expect(hits('/*\n  "SELECT * FROM users WHERE id = " + id\n*/\n')).toHaveLength(0);
+    expect(hits('const a = <div>{/* "SELECT * FROM users WHERE id = " + id */}</div>;\n')).toHaveLength(0);
+  });
+});
