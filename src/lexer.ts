@@ -182,6 +182,27 @@ export function lexJs(content: string): LexResult {
   return { comments, mask: mask.join('') };
 }
 
+const commentlessCache = new WeakMap<string[], string[]>();
+
+/**
+ * The lines with only comments blanked; strings, regexes and code are kept.
+ * For rules that match inside a string but should not fire on a comment that
+ * quotes one. Offsets are preserved. Memoized per lines-array.
+ */
+export function blankComments(lines: string[]): string[] {
+  const cached = commentlessCache.get(lines);
+  if (cached) return cached;
+  const content = lines.join('\n');
+  const out = content.split('');
+  for (const c of lexJs(content).comments) {
+    const end = c.start + 2 + c.body.length + (content.startsWith('/*', c.start) ? 2 : 0);
+    for (let k = c.start; k < end; k++) if (out[k] !== '\n') out[k] = ' ';
+  }
+  const result = out.join('').split('\n');
+  commentlessCache.set(lines, result);
+  return result;
+}
+
 // The scanner hands the SAME `lines` array to every multiline rule in a file,
 // so cache the mask on the array identity: one lexer pass per file instead of
 // one per rule (four rules × a full re-lex was a real slowdown on big files).

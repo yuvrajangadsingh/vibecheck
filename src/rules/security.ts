@@ -49,7 +49,9 @@ export const securityRules: Rule[] = [
     severity: 'warn',
     languages: ['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'],
     pattern: /['"`]\s*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)\b[^'"`]*?\b(?:FROM|INTO|SET|WHERE|VALUES|JOIN|TABLE|DATABASE|INDEX|COLUMN)\b[^'"`]*?(?:\$\{|['"`]\s*\+\s*\w)/i,
-    codeOnly: true,
+    // Not codeOnly: the SQL it looks for lives inside the string, which that
+    // mask blanks. Only comments are blanked, so a comment quoting one is quiet.
+    skipComments: true,
     messageTemplate: 'SQL query built with string concatenation. Use parameterized queries.',
   },
 ];
