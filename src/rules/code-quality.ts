@@ -19,7 +19,12 @@ export const codeQualityRules: Rule[] = [
     category: 'code-quality',
     severity: 'warn',
     languages: ['ts', 'tsx'],
-    pattern: /\bas\s+(?:unknown|any|never|const|[A-Za-z_$][\w$]*(?:\s*<[^;\n]*?>)?(?:\s*\[\])?)\s*\)?\s+as\s+(?:unknown|any|never|const|[A-Za-z_$][\w$]*(?:\s*<[^;\n]*?>)?(?:\s*\[\])?)/,
+    // The middle step must look like a type: English such as "got as far as a
+    // URL" reads like a chain. Type names are nearly always capitalized, so a
+    // lowercase user-defined name in the middle (alias, interface, class, enum
+    // or type parameter: `x as myType as T`) is the known miss. `new` and
+    // `webkitURL` are the lowercase built-ins.
+    pattern: /\bas\s+(?:(?:unknown|any|never|const|string|number|boolean|object|bigint|symbol|undefined|null|void|true|false|this)\b|(?:[A-Z_$][\w$]*|new|webkitURL)(?:\s*<[^;\n]*?>)?)(?:\s*\[\])?\s*\)?\s+as\s+(?:unknown|any|never|const|[A-Za-z_$][\w$]*(?:\s*<[^;\n]*?>)?(?:\s*\[\])?)/,
     // vibecheck-ignore handling moved to the scanner-level suppression pre-pass (suppressions.ts)
     antiPattern: /^\s*(?:\/\/|\/\*|\*)|eslint-disable|@ts-expect-error|@ts-ignore|\/\/\s*(?:safe|intentional)|\/\*\s*(?:safe|intentional)/i,
     messageTemplate: 'Double type assertion bypasses TypeScript safety. Isolate and justify, or refactor to a safer cast.',
