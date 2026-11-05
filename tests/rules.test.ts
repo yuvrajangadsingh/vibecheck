@@ -542,6 +542,36 @@ describe('no-double-assertion rule', () => {
     const line = 'const user = value as unknown as User; // intentional unsafe boundary';
     expect(rule.antiPattern!.test(line)).toBe(true);
   });
+
+  // ME-3: English reads like a chain. A real double assertion goes through a
+  // keyword, a primitive, or a type name.
+  it('skips English that reads like a chain', () => {
+    for (const s of [
+      'it("reports the resolve phase when it never got as far as a URL", () => {});',
+      'const m = `as soon as it is ready`;',
+      'const ready = true; // works as well as the old one',
+      'const a = "as long as you like", b = "as anything as it gets";',
+    ]) expect(rule.pattern.test(s)).toBe(false);
+  });
+
+  it('detects chains through a primitive, an array, a generic or an interpolation', () => {
+    for (const s of [
+      'const n = id as number as Brand;',
+      'const xs = raw as any[] as Item[];',
+      'const v = value as Record<"key", string> as Target;',
+      'const m = `${value as unknown as string}`;',
+      'const p = (x as _Internal) as Public;',
+      'const u = value as undefined as string | undefined;',
+      'const n = value as null as string | null;',
+      'const b = value as false as boolean;',
+      'const v = value as void as undefined;',
+      'const t = value as true as boolean;',
+      'return input as this as Box;',
+      'return (input as this[]) as Box[];',
+      'const u = x as webkitURL as URL;',
+      'const f = x as new<T>() => Array<T> as Function;',
+    ]) expect(rule.pattern.test(s)).toBe(true);
+  });
 });
 
 describe('framework rules', () => {
