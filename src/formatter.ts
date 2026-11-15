@@ -2,7 +2,7 @@ import pc from 'picocolors';
 import { isFixable } from './fixer.js';
 import type { Finding, ScanResult, Severity } from './types.js';
 
-const severityColor: Record<Severity, (s: string) => string> = {
+export const severityColor: Record<Severity, (s: string) => string> = {
   error: pc.red,
   warn: pc.yellow,
   info: pc.dim,

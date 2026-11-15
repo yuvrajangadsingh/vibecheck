@@ -11,7 +11,8 @@ import { scan } from './scanner.js';
 import fg from 'fast-glob';
 import { readStagedSnapshot, type StagedSnapshot } from './staged.js';
 import { applyFixes } from './fixer.js';
-import { formatPretty, formatJSON, formatQuiet, formatCompact, formatGh, filterBySeverity, padRight } from './formatter.js';
+import { formatPretty, formatJSON, formatQuiet, formatCompact, formatGh, filterBySeverity, padRight, severityColor } from './formatter.js';
+import { auditSite } from './site.js';
 import { formatSarif } from './sarif.js';
 import { computeScore, formatScore } from './score.js';
 import { badgeFor } from './badge.js';
@@ -85,6 +86,7 @@ Examples:
   $ vibecheck --badge slop.svg .             Write an SVG badge for your README
   $ vibecheck --rule 'no-eval: off' .        This run only, turn one rule off
   $ vibecheck --no-defaults --rule 'no-obvious-comments: warn' .   Run exactly one rule
+  $ vibecheck site https://example.com       Check a live site for AI-site tells
 
 Exit codes:
   0  clean, or no findings at or above --fail-on
@@ -575,6 +577,34 @@ program
       console.log(`${padRight(r.id, idWidth)}  ${padRight(r.severity, 5)}  ${padRight(r.category, categoryWidth)}  ${padRight(r.languages.join(','), languagesWidth)}  ${r.fixable ? 'yes' : 'no'}`);
     }
     console.log(`\n${rows.length} rules`);
+  });
+
+program
+  .command('site')
+  .description('Check a live site for AI-site tells: platform domain, no 404 page, missing meta and og tags, public .env or source maps, purple gradients')
+  .argument('[url]', 'The site to check, e.g. https://example.com')
+  .option('--json', 'Output as JSON')
+  .action(async (url: string | undefined, _options: { json?: boolean }, command: Command) => {
+    if (!url) {
+      console.error('Usage: vibecheck site <url>\nTo scan a folder named site, run: vibecheck ./site');
+      process.exit(2);
+    }
+    const options = command.optsWithGlobals() as { json?: boolean };
+    const report = await auditSite(url);
+    if (report.findings.some((f) => f.severity === 'error')) process.exitCode = 1;
+    if (options.json) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+
+    console.log(report.url);
+    const idWidth = Math.max(0, ...report.findings.map((f) => f.id.length));
+    for (const f of report.findings) {
+      console.log(`  ${severityColor[f.severity](padRight(f.severity, 5))}  ${padRight(f.id, idWidth)}  ${f.message}`);
+    }
+    const count = (s: string) => report.findings.filter((f) => f.severity === s).length;
+    console.log(`\n${count('error')} errors, ${count('warn')} warnings, ${count('info')} info`);
+    if (report.notChecked.length) console.log(`Not checked: ${report.notChecked.join(', ')}`);
   });
 
 program.parseAsync().catch((err) => {
